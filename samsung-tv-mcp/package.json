@@ -1,0 +1,42 @@
+{
+  "name": "samsung-tv-mcp",
+  "version": "0.1.0",
+  "description": "MCP server for Samsung Tizen TV control — power, volume, and input switching via the TV's built-in WebSocket API",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "samsung-tv-mcp": "dist/index.js"
+  },
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --check .",
+    "format:fix": "prettier --write ."
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.1",
+    "dotenv": "^16.4.7",
+    "ws": "^8.18.1",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.22.0",
+    "@types/node": "^22.13.14",
+    "@types/ws": "^8.18.0",
+    "eslint": "^9.22.0",
+    "prettier": "^3.5.3",
+    "tsx": "^4.19.3",
+    "typescript-eslint": "^8.26.1",
+    "typescript": "^5.8.2",
+    "vitest": "^2.0.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
