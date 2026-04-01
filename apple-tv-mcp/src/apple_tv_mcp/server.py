@@ -114,8 +114,8 @@ async def get_volume() -> str:
 
 
 @mcp.tool()
-async def mute(direction: str = "toggle") -> str:
-    """Adjust volume — use direction 'up' or 'down' for single steps.
+async def volume_step(direction: str) -> str:
+    """Step the volume up or down by one increment via CEC.
 
     Args:
         direction: 'up' for volume up, 'down' for volume down
@@ -130,7 +130,7 @@ async def mute(direction: str = "toggle") -> str:
         else:
             return f"Invalid direction '{direction}'. Use 'up' or 'down'."
     except Exception as e:
-        return f"Volume adjust failed: {e}"
+        return f"Volume step failed: {e}"
 
 
 # ---- Navigation / Remote ----
@@ -148,7 +148,7 @@ async def press_key(key: str) -> str:
     """Simulate a remote button press on the Apple TV.
 
     Args:
-        key: Button name — up, down, left, right, select, enter, menu, back, home, play, pause, play_pause, stop, next, previous, top_menu, screensaver
+        key: Button name — up, down, left, right, select, enter, menu, back, home, play, pause, play_pause, stop, next, previous, top_menu, screensaver, volume_up, volume_down
     """
     try:
         await client.press_key(key)

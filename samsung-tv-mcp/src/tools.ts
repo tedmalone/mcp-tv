@@ -190,7 +190,7 @@ export function registerTools(server: McpServer, client: SamsungTvClient): void 
 
   server.tool(
     'power',
-    'Turn the Samsung TV on or off. Power on uses Wake-on-LAN; power off sends KEY_POWER via WebSocket.',
+    'Turn the Samsung TV on or off. Power on uses Wake-on-LAN (requires Ethernet connection and "Power On with Mobile" enabled; unreliable over WiFi). Power off sends KEY_POWER via WebSocket.',
     {
       action: z.enum(['on', 'off']).describe("'on' to wake the TV, 'off' to turn it off"),
     },
@@ -202,7 +202,12 @@ export function registerTools(server: McpServer, client: SamsungTvClient): void 
               'SAMSUNG_TV_MAC is not configured. Run discover first — it will auto-save the MAC.',
             );
           }
-          await sendWakeOnLan(client.mac);
+          // Derive directed broadcast from TV IP (e.g. 192.168.6.209 → 192.168.6.255)
+          // to ensure WoL crosses subnet boundaries on mesh/VLAN networks.
+          const broadcast =
+            process.env.SAMSUNG_TV_WOL_BROADCAST ??
+            (client.ip ? client.ip.split('.').slice(0, 3).join('.') + '.255' : '255.255.255.255');
+          await sendWakeOnLan(client.mac, broadcast);
           return ok('Wake-on-LAN magic packet sent. TV should power on within a few seconds.');
         } else {
           await client.sendKey('KEY_POWER');

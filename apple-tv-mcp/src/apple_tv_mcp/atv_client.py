@@ -216,6 +216,9 @@ class AtvClient:
         await pairing.close()
         self._active_pairing = None
 
+        # Force reconnect so the next command picks up all paired credentials.
+        await self.disconnect()
+
         logger.info("Paired %s, credentials saved", protocol.name)
         return creds
 
@@ -252,6 +255,7 @@ class AtvClient:
     async def press_key(self, key: str) -> None:
         atv = await self.ensure_connected()
         rc = atv.remote_control
+        audio = atv.audio
         key_map: dict[str, RemoteControlCallable] = {
             "up": rc.up,
             "down": rc.down,
@@ -270,6 +274,8 @@ class AtvClient:
             "previous": rc.previous,
             "top_menu": rc.top_menu,
             "screensaver": rc.screensaver,
+            "volume_up": audio.volume_up,
+            "volume_down": audio.volume_down,
         }
         fn = key_map.get(key.lower())
         if fn is None:
