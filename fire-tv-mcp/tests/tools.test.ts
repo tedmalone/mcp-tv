@@ -41,7 +41,9 @@ function createMockClient() {
     listDevices: vi.fn(async () => []),
     listMdnsServices: vi.fn(async () => []),
     ensureConnected: vi.fn(async () => {}),
+    setActiveSerial: vi.fn(),
     configuredSerial: '192.168.1.100:5555',
+    activeSerial: '192.168.1.100:5555',
   } as unknown as AdbClient;
 
   return { client, shellCalls, keyeventCalls };
@@ -196,5 +198,55 @@ describe('click_node — bounds parsing', () => {
     const handler = handlers.get('click_node')!;
     const result = await handler({ query: 'Settings button', field: 'content-desc' });
     expect(result.isError).toBeFalsy();
+  });
+});
+
+describe('discover — auto target selection', () => {
+  it('auto-selects a ready discovered device when FIRETV_IP is not configured', async () => {
+    const mock = createMockServer();
+    const clientMock = createMockClient();
+    (clientMock.client as unknown as { configuredSerial: string | null }).configuredSerial = null;
+    vi.mocked(clientMock.client.listDevices).mockResolvedValueOnce([
+      {
+        serial: '192.168.4.25:5555',
+        state: 'device',
+        details: { model: 'AFTKA' },
+      },
+    ]);
+
+    registerTools(mock.server, clientMock.client);
+    const discover = mock.handlers.get('discover')!;
+    const result = await discover({});
+
+    expect(vi.mocked(clientMock.client.setActiveSerial)).toHaveBeenCalledWith('192.168.4.25:5555');
+    expect(result.isError).toBeFalsy();
+    expect(result.content[0].text).toContain('Auto-selected discovered device');
+  });
+
+  it('filters out non-Fire devices from discover output and auto-select', async () => {
+    const mock = createMockServer();
+    const clientMock = createMockClient();
+    (clientMock.client as unknown as { configuredSerial: string | null }).configuredSerial = null;
+    vi.mocked(clientMock.client.listDevices).mockResolvedValueOnce([
+      {
+        serial: '192.168.6.221:5555',
+        state: 'device',
+        details: { model: 'HisenseCanvas', product: 'google_tv' },
+      },
+      {
+        serial: '192.168.4.25:5555',
+        state: 'device',
+        details: { model: 'AFTKA', product: 'AFTKA' },
+      },
+    ]);
+
+    registerTools(mock.server, clientMock.client);
+    const discover = mock.handlers.get('discover')!;
+    const result = await discover({});
+
+    expect(vi.mocked(clientMock.client.setActiveSerial)).toHaveBeenCalledWith('192.168.4.25:5555');
+    expect(result.content[0].text).toContain('Ignored 1 non-Fire ADB device');
+    expect(result.content[0].text).toContain('AFTKA');
+    expect(result.content[0].text).not.toContain('HisenseCanvas');
   });
 });

@@ -36,34 +36,56 @@ registerTools(server, client);
 
 async function main(): Promise<void> {
   try {
+    logger.info('Startup step 1/5: checking adb binary...');
     await client.runAdb(['version']);
   } catch {
     logger.error(`Startup dependency error:\n${adbInstallGuidance()}`);
     process.exit(1);
   }
 
+  logger.info('Startup step 2/5: starting adb server...');
+  try {
+    await client.runAdb(['start-server']);
+  } catch (err) {
+    logger.error(`Failed to start adb server: ${err instanceof Error ? err.message : String(err)}`);
+    process.exit(1);
+  }
+
   if (FIRETV_IP) {
     const serial = `${FIRETV_IP}:${FIRETV_PORT}`;
+    logger.info(`Startup step 3/5: connecting to Fire TV (${serial})...`);
     try {
       await client.runAdb(['connect', serial]);
-      const devices = await client.listDevices();
-      const target = devices.find((d) => d.serial === serial);
-      if (!target) {
-        logger.warn(fireTvReachabilityGuidance(FIRETV_IP, FIRETV_PORT));
-      } else if (target.state === 'unauthorized') {
-        logger.warn(fireTvUnauthorizedGuidance(FIRETV_IP, FIRETV_PORT));
-      } else if (target.state !== 'device') {
-        logger.warn(
-          `Fire TV device state is '${target.state}'. Some commands may fail until the device is ready.`,
-        );
-      }
     } catch {
-      logger.warn(fireTvReachabilityGuidance(FIRETV_IP, FIRETV_PORT));
+      logger.error(fireTvReachabilityGuidance(FIRETV_IP, FIRETV_PORT));
+      process.exit(1);
     }
+
+    logger.info('Startup step 4/5: verifying device via adb devices...');
+    const devices = await client.listDevices();
+    const target = devices.find((d) => d.serial === serial);
+    if (!target) {
+      logger.error(fireTvReachabilityGuidance(FIRETV_IP, FIRETV_PORT));
+      process.exit(1);
+    }
+    if (target.state === 'unauthorized') {
+      logger.error(fireTvUnauthorizedGuidance(FIRETV_IP, FIRETV_PORT));
+      process.exit(1);
+    }
+    if (target.state !== 'device') {
+      logger.error(`Fire TV device state is '${target.state}', expected 'device'.`);
+      process.exit(1);
+    }
+  } else {
+    logger.info('Startup steps 3/5 and 4/5 skipped: FIRETV_IP is not configured.');
+    logger.info(
+      'Discovery mode: run the discover tool to find Fire TV IPs, then set FIRETV_IP and restart for full control.',
+    );
   }
 
   const transport = new StdioServerTransport();
   await server.connect(transport);
+  logger.info('Startup step 5/5: ready.');
   logger.info('Server running (stdio).');
   logger.info(
     `Device: ${FIRETV_IP ? `${FIRETV_IP}:${FIRETV_PORT}` : 'not configured (use discover first)'}`,

@@ -54,6 +54,31 @@ type UiNode = {
   node?: UiNode[] | UiNode;
 };
 
+function isLikelyFireTvDevice(device: {
+  serial: string;
+  details: Record<string, string>;
+}): boolean {
+  const fields = [
+    device.serial,
+    device.details.model ?? '',
+    device.details.product ?? '',
+    device.details.device ?? '',
+  ]
+    .join(' ')
+    .toLowerCase();
+
+  // Fire TV devices commonly expose AFT* model/product/device identifiers.
+  if (/\baft[a-z0-9_-]*\b/.test(fields)) return true;
+  if (fields.includes('fire tv')) return true;
+  if (fields.includes('amazon')) return true;
+  return false;
+}
+
+function isLikelyFireTvMdns(service: { instance: string; serviceType: string }): boolean {
+  const text = `${service.instance} ${service.serviceType}`.toLowerCase();
+  return text.includes('fire-tv') || /\baft[a-z0-9_-]*\b/.test(text) || text.includes('amazon');
+}
+
 function ok(text: string) {
   return { content: [{ type: 'text' as const, text }] };
 }
@@ -70,7 +95,10 @@ function withHints(message: string): string {
     lower.includes('no devices') ||
     lower.includes('not configured')
   ) {
-    return `${message}\nHint: Verify FIRETV_IP/FIRETV_PORT, ensure ADB debugging is enabled, and accept the trust prompt on TV.`;
+    return (
+      `${message}\nHint: If FIRETV_IP is not set, run discover first to find your device IP. ` +
+      'Then set FIRETV_IP/FIRETV_PORT, ensure ADB debugging is enabled, and accept the trust prompt on TV.'
+    );
   }
   return message;
 }
@@ -127,12 +155,37 @@ export function registerTools(server: McpServer, client: AdbClient): void {
     {},
     async () => {
       try {
-        const [mdns, devices] = await Promise.all([
-          client.listMdnsServices().catch(() => []),
-          client.listDevices().catch(() => []),
-        ]);
+        const mdns = await client.listMdnsServices().catch(() => []);
 
-        const mappedMdns = mdns.map((service) => ({
+        // Proactively attempt adb connect for mDNS-advertised targets so discovery
+        // works even when the user hasn't manually run `adb connect` yet.
+        const mdnsTargets = Array.from(
+          new Set(
+            mdns
+              .filter((service) => service.address && service.port)
+              .map((service) => `${service.address}:${service.port}`),
+          ),
+        );
+        for (const serial of mdnsTargets) {
+          await client.runAdb(['connect', serial]).catch(() => undefined);
+        }
+
+        const devices = await client.listDevices().catch(() => []);
+
+        const fireMdns = mdns.filter(isLikelyFireTvMdns);
+        const fireDevices = devices.filter(isLikelyFireTvDevice);
+        const nonFireDevices = devices.filter((device) => !isLikelyFireTvDevice(device));
+
+        let autoSelectedSerial: string | null = null;
+        if (!client.configuredSerial) {
+          const readyDevice = fireDevices.find((device) => device.state === 'device');
+          if (readyDevice) {
+            client.setActiveSerial(readyDevice.serial);
+            autoSelectedSerial = readyDevice.serial;
+          }
+        }
+
+        const mappedMdns = fireMdns.map((service) => ({
           id: `fire_tv:${service.address ?? service.instance}`,
           brand: 'fire_tv',
           ip: service.address,
@@ -150,7 +203,7 @@ export function registerTools(server: McpServer, client: AdbClient): void {
           },
         }));
 
-        const mappedDevices = devices.map((device) => {
+        const mappedDevices = fireDevices.map((device) => {
           const [ipPart] = device.serial.split(':');
           const isIpSerial = /^\d{1,3}(\.\d{1,3}){3}$/.test(ipPart);
           return {
@@ -170,7 +223,33 @@ export function registerTools(server: McpServer, client: AdbClient): void {
           };
         });
 
-        return ok(JSON.stringify([...mappedMdns, ...mappedDevices], null, 2));
+        const payload = JSON.stringify([...mappedMdns, ...mappedDevices], null, 2);
+        const notes: string[] = [];
+        if (nonFireDevices.length > 0) {
+          notes.push(
+            `Ignored ${nonFireDevices.length} non-Fire ADB device(s) for fire-tv-mcp targeting.`,
+          );
+        }
+        if (mappedMdns.length === 0 && mappedDevices.length === 0 && nonFireDevices.length > 0) {
+          notes.push(
+            'No likely Fire TV devices found. If those are Google TV / Android TV devices, use the dedicated Google TV connector.',
+          );
+        }
+
+        if (autoSelectedSerial) {
+          return ok(
+            [
+              `Auto-selected discovered device for this session: ${autoSelectedSerial}`,
+              ...notes,
+              payload,
+            ].join('\n\n'),
+          );
+        }
+
+        if (notes.length > 0) {
+          return ok([...notes, payload].join('\n\n'));
+        }
+        return ok(payload);
       } catch (e) {
         return err(withHints(`discover failed: ${e instanceof Error ? e.message : String(e)}`));
       }

@@ -164,6 +164,6 @@ describe('AdbClient.getScreenXml', () => {
 describe('AdbClient.ensureConnected', () => {
   it('throws when IP is not configured', async () => {
     const client = makeClientNoIp();
-    await expect(client.ensureConnected()).rejects.toThrow('FIRETV_IP is not configured');
+    await expect(client.ensureConnected()).rejects.toThrow('No Fire TV target is configured');
   });
 });

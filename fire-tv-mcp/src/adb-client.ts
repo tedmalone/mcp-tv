@@ -46,21 +46,41 @@ const ADB_RETRY_BASE_DELAY_MS = envInt(
 const ADB_SHELL_ATTEMPTS = envInt('FIRETV_ADB_SHELL_ATTEMPTS', DEFAULT_ADB_SHELL_ATTEMPTS);
 
 export class AdbClient {
-  private readonly serial: string;
+  private readonly configuredDeviceSerial: string;
+  private activeDeviceSerial: string;
   private connected = false;
   private readonly logger = createLogger('fire-tv-mcp/adb');
 
   constructor(private readonly config: FireTvConfig) {
-    this.serial = config.ip ? `${config.ip}:${config.port}` : '';
+    this.configuredDeviceSerial = config.ip ? `${config.ip}:${config.port}` : '';
+    this.activeDeviceSerial = this.configuredDeviceSerial;
   }
 
   get configuredSerial(): string | null {
-    return this.serial || null;
+    return this.configuredDeviceSerial || null;
+  }
+
+  get activeSerial(): string | null {
+    return this.activeDeviceSerial || null;
+  }
+
+  setActiveSerial(serial: string): void {
+    const next = serial.trim();
+    if (!next) {
+      throw new Error('Active device serial cannot be empty.');
+    }
+    if (this.activeDeviceSerial !== next) {
+      this.activeDeviceSerial = next;
+      this.connected = false;
+      this.logger.info(`Using discovered device target: ${next}`);
+    }
   }
 
   async ensureConnected(): Promise<void> {
-    if (!this.serial) {
-      throw new Error('FIRETV_IP is not configured.');
+    if (!this.activeDeviceSerial) {
+      throw new Error(
+        'No Fire TV target is configured. Run discover first, or set FIRETV_IP/FIRETV_PORT.',
+      );
     }
     if (this.connected) return;
     await this.connectWithRetry();
@@ -68,11 +88,11 @@ export class AdbClient {
   }
 
   async disconnect(): Promise<void> {
-    if (!this.serial) {
+    if (!this.activeDeviceSerial) {
       return;
     }
     try {
-      await this.runAdb(['disconnect', this.serial]);
+      await this.runAdb(['disconnect', this.activeDeviceSerial]);
     } finally {
       this.connected = false;
     }
@@ -83,7 +103,7 @@ export class AdbClient {
     for (let attempt = 1; attempt <= ADB_SHELL_ATTEMPTS; attempt++) {
       await this.ensureConnected();
       try {
-        return await this.runAdb(['-s', this.serial, 'shell', command]);
+        return await this.runAdb(['-s', this.activeDeviceSerial, 'shell', command]);
       } catch (err) {
         lastError = err;
         if (attempt < ADB_SHELL_ATTEMPTS) {
@@ -121,12 +141,16 @@ export class AdbClient {
 
   async screenshotBase64(): Promise<string> {
     await this.ensureConnected();
-    const { stdout } = await execa('adb', ['-s', this.serial, 'exec-out', 'screencap', '-p'], {
+    const { stdout } = await execa(
+      'adb',
+      ['-s', this.activeDeviceSerial, 'exec-out', 'screencap', '-p'],
+      {
       encoding: 'buffer',
       stdout: 'pipe',
       stderr: 'pipe',
       reject: true,
-    });
+      },
+    );
     return Buffer.from(stdout).toString('base64');
   }
 
@@ -207,5 +231,9 @@ export class AdbClient {
         raw: line,
       };
     });
+  }
+
+  private get serial(): string {
+    return this.activeDeviceSerial;
   }
 }

@@ -30,6 +30,7 @@ async function main(): Promise<void> {
   });
 
   try {
+    logger.info('Check step 1/5: checking adb binary...');
     const version = await client.runAdb(['version']);
     const firstLine = version.split(/\r?\n/)[0] ?? version;
     logger.info(`adb check: ok (${firstLine})`);
@@ -37,14 +38,23 @@ async function main(): Promise<void> {
     fail(adbInstallGuidance());
   }
 
+  logger.info('Check step 2/5: starting adb server...');
+  try {
+    await client.runAdb(['start-server']);
+  } catch (err) {
+    fail(`Failed to start adb server: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
   if (!FIRETV_IP) {
     logger.info(
-      'FIRETV_IP is not set. Dependency check passed; set FIRETV_IP when ready to control a device.',
+      'Check steps 3/5 and 4/5 skipped: FIRETV_IP is not set. Dependency check passed.',
     );
+    logger.info('Check step 5/5: ready.');
     return;
   }
 
   const serial = `${FIRETV_IP}:${FIRETV_PORT}`;
+  logger.info(`Check step 3/5: connecting to Fire TV (${serial})...`);
   try {
     const connectOut = await client.runAdb(['connect', serial]);
     logger.info(`adb connect: ${connectOut || 'ok'}`);
@@ -52,6 +62,7 @@ async function main(): Promise<void> {
     fail(fireTvReachabilityGuidance(FIRETV_IP, FIRETV_PORT));
   }
 
+  logger.info('Check step 4/5: verifying device via adb devices...');
   const devices = await client.listDevices();
   const target = devices.find((d) => d.serial === serial);
   if (!target) {
@@ -60,6 +71,7 @@ async function main(): Promise<void> {
 
   if (target.state === 'device') {
     logger.info(`device check: ready (${serial})`);
+    logger.info('Check step 5/5: ready.');
     return;
   }
 
