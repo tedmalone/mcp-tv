@@ -67,15 +67,17 @@ Accumulated notes from real device testing. Updated over time as new devices are
 
 ### Input Switching (Newer Tizen Models)
 - `KEY_HDMI1`, `KEY_HDMI2`, `KEY_HDMI3`, `KEY_HDMI4` **do not work** on 2025 Tizen models. Direct HDMI keycodes are no longer supported.
-- **Working approach:** Navigate the source grid via `KEY_SOURCE`.
-- Grid layout observed (2-column, paginated):
-  - Row 1: TV | [recently used HDMI input]
-  - Row 2: [current input] | Help
-  - Row 3: External Devices | Setup Universal Remote
-- Focus starts on the **current input** after pressing `KEY_SOURCE`.
-- To switch from HDMI2 to HDMI4: `KEY_SOURCE` → `KEY_RIGHT` → `KEY_UP` → `KEY_ENTER`.
-- **Pressing RIGHT from the rightmost column flips to page 2** of the grid — not intuitive, easy to overshoot.
-- The grid times out after ~3 seconds. Key presses must be sent quickly.
+- **Working approach:** `KEY_SOURCE` → `KEY_RIGHT` → `KEY_UP` → `KEY_ENTER` — always switches to the most recently used other input.
+- Grid layout (2-column, **dynamic** — changes based on connected devices and last-used source):
+  - Row 0: TV | [most recently used non-current input]
+  - Row 1: [**current active input** — always focused on open] | Help
+  - Row 2: External Devices | Setup Universal Remote
+- The current input is **always focused** when the grid opens. The last-used other input is always at (0,1) — one RIGHT, one UP.
+- `switch_input` effectively **toggles** between the two most recently used inputs. It cannot target an arbitrary input (e.g., HDMI1) without manual `send_key` navigation.
+- **Do not try to reset to top-left** (UP×N + LEFT×N). Samsung's grid **wraps at the edges** — overshooting lands in unexpected positions.
+- **Pressing RIGHT from the rightmost column flips to page 2** — easy to overshoot if navigating beyond col 1.
+- The grid times out after ~3 seconds of inactivity. Continuous key presses keep it open.
+- **Samsung TV has no screenshot API.** Navigation is completely blind. Without visual feedback, complex multi-step grid navigation is unreliable — stick to the confirmed 3-key toggle sequence.
 
 ### Wake-on-LAN
 - WoL **requires Ethernet**. The TV is on WiFi (`networkType: wireless`); its WiFi NIC powers down in standby and doesn't receive magic packets.

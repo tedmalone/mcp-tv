@@ -21,6 +21,32 @@ const INPUT_KEY_CODES: Record<string, string> = {
 
 const VALID_INPUTS = Object.keys(INPUT_KEY_CODES);
 
+const delay = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Switch input via Samsung source picker grid.
+ *
+ * On newer Tizen models (2024+), KEY_HDMIx keycodes are ignored. The source grid
+ * is the only reliable path. When opened via KEY_SOURCE, the grid always focuses the
+ * current active input. The most recently used other input is always one step RIGHT
+ * and one step UP from there. This matches the manually confirmed sequence from
+ * device testing (QN55S95FAFXZA, 2025).
+ *
+ * For inputs not in the "recently used" slot, use send_key with KEY_SOURCE and
+ * navigate manually — Samsung's dynamic grid cannot be reliably addressed by
+ * coordinates without visual feedback.
+ */
+async function switchViaSourceGrid(client: SamsungTvClient): Promise<void> {
+  const NAV_DELAY = 350;
+  await client.sendKey('KEY_SOURCE');
+  await delay(700);
+  await client.sendKey('KEY_RIGHT');
+  await delay(NAV_DELAY);
+  await client.sendKey('KEY_UP');
+  await delay(NAV_DELAY);
+  await client.sendKey('KEY_ENTER');
+}
+
 function envInt(name: string, fallback: number): number {
   const raw = process.env[name];
   if (!raw) return fallback;
@@ -285,18 +311,22 @@ export function registerTools(server: McpServer, client: SamsungTvClient): void 
 
   server.tool(
     'switch_input',
-    `Switch the TV input source. Valid inputs: ${VALID_INPUTS.join(', ')}`,
+    `Switch to the most recently used other input via the source picker grid. ` +
+      `On newer Samsung models (2024+) KEY_HDMIx keycodes are ignored — this tool uses ` +
+      `KEY_SOURCE → RIGHT → UP → ENTER, which navigates from the current active input to ` +
+      `the last-used other input (confirmed on QN55S95FAFXZA). The 'input' parameter is ` +
+      `accepted for API compatibility but the grid always selects the previously active source. ` +
+      `For arbitrary input selection use send_key with KEY_SOURCE and navigate manually.`,
     {
       input: z.string().describe(`Input source name: ${VALID_INPUTS.join(', ')}`),
     },
     async ({ input }) => {
-      const key = INPUT_KEY_CODES[input.toLowerCase()];
-      if (!key) {
+      if (!INPUT_KEY_CODES[input.toLowerCase()]) {
         return err(`Unknown input '${input}'. Valid inputs: ${VALID_INPUTS.join(', ')}`);
       }
       try {
-        await client.sendKey(key);
-        return ok(`Switched to input: ${input}`);
+        await switchViaSourceGrid(client);
+        return ok(`Switched input via source grid (KEY_SOURCE → RIGHT → UP → ENTER).`);
       } catch (e) {
         return err(withHints(`Switch input failed: ${e instanceof Error ? e.message : String(e)}`));
       }
