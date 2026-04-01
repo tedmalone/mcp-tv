@@ -1,0 +1,132 @@
+name: MCP CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  fire-tv-mcp:
+    name: Fire TV MCP (Node)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: fire-tv-mcp
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: fire-tv-mcp/package-lock.json
+
+      - name: Install
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Build
+        run: npm run build
+
+      - name: Test
+        run: npm test
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: fire-tv-mcp-dist
+          path: |
+            fire-tv-mcp/dist
+            fire-tv-mcp/package.json
+            fire-tv-mcp/package-lock.json
+            fire-tv-mcp/.env.example
+
+  samsung-tv-mcp:
+    name: Samsung TV MCP (Node)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: samsung-tv-mcp
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: samsung-tv-mcp/package-lock.json
+
+      - name: Install
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Build
+        run: npm run build
+
+      - name: Test
+        run: npm test
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: samsung-tv-mcp-dist
+          path: |
+            samsung-tv-mcp/dist
+            samsung-tv-mcp/package.json
+            samsung-tv-mcp/package-lock.json
+            samsung-tv-mcp/.env.example
+
+  apple-tv-mcp:
+    name: Apple TV MCP (Python)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apple-tv-mcp
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install package + dev deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Lint (ruff)
+        run: ruff check .
+
+      - name: Type check (mypy)
+        run: mypy src
+
+      - name: Test
+        run: pytest
+
+      - name: Build wheel/sdist
+        run: |
+          pip install build
+          python -m build
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: apple-tv-mcp-dist
+          path: |
+            apple-tv-mcp/dist
+            apple-tv-mcp/pyproject.toml
+            apple-tv-mcp/.env.example

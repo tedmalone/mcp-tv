@@ -18,7 +18,8 @@ const FIRETV_PORT = Number(process.env.FIRETV_PORT ?? String(DEFAULT_FIRETV_ADB_
 
 const DEFAULT_FIRETV_REST_PORT = 8080;
 const FIRETV_REST_PORT = Number(process.env.FIRETV_REST_PORT ?? String(DEFAULT_FIRETV_REST_PORT));
-const FIRETV_REST_API_KEY = process.env.FIRETV_REST_API_KEY ?? '';
+const DEFAULT_FIRETV_REST_API_KEY = 'fire-tv-mcp';
+const FIRETV_REST_API_KEY = process.env.FIRETV_REST_API_KEY ?? DEFAULT_FIRETV_REST_API_KEY;
 const FIRETV_REST_TOKEN = process.env.FIRETV_REST_TOKEN ?? '';
 
 const logger = createLogger('fire-tv-mcp');
@@ -104,8 +105,11 @@ async function main(): Promise<void> {
     `ADB device: ${FIRETV_IP ? `${FIRETV_IP}:${FIRETV_PORT}` : 'not configured (use discover first)'}`,
   );
   logger.info(
-    `REST API: ${rest.ready ? `ready (${FIRETV_IP}:${FIRETV_REST_PORT})` : rest.configured ? 'configured but not authenticated (run setup_rest tool)' : 'not configured (set FIRETV_REST_API_KEY to enable fast REST path)'}`,
+    `REST API: ${rest.ready ? `ready (${FIRETV_IP ?? 'discovered-target'}:${FIRETV_REST_PORT})` : rest.configured ? 'configured but not authenticated (run pair start)' : 'not configured'}`,
   );
+  if (!process.env.FIRETV_REST_API_KEY) {
+    logger.info('REST API key not set; using default session key for easier first-time pairing.');
+  }
 }
 
 main().catch((err) => {

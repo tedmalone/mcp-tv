@@ -140,6 +140,69 @@ function parseBounds(bounds: string): { x: number; y: number } {
   return { x: (x1 + x2) / 2, y: (y1 + y2) / 2 };
 }
 
+function serialToIp(serial: string): string | null {
+  const [host] = serial.split(':');
+  return host && /^\d{1,3}(\.\d{1,3}){3}$/.test(host) ? host : null;
+}
+
+function extractPinCandidates(input: string): string[] {
+  const candidates = new Set<string>();
+
+  const direct = input.matchAll(/\b(\d{4})\b/g);
+  for (const m of direct) {
+    if (m[1]) candidates.add(m[1]);
+  }
+
+  const spaced = input.matchAll(/\b(\d(?:\s+\d){3})\b/g);
+  for (const m of spaced) {
+    const compact = (m[1] ?? '').replace(/\s+/g, '');
+    if (/^\d{4}$/.test(compact)) {
+      candidates.add(compact);
+    }
+  }
+
+  return [...candidates];
+}
+
+async function detectPairingPin(adb: AdbClient): Promise<string | null> {
+  const nodes = await getScreenNodes(adb);
+  const scored = new Map<string, number>();
+
+  for (const node of nodes) {
+    const text = `${node.text ?? ''} ${node['content-desc'] ?? ''}`.trim();
+    if (!text) continue;
+    const lower = text.toLowerCase();
+    const weight = lower.includes('pin') || lower.includes('code') ? 3 : 1;
+    for (const candidate of extractPinCandidates(text)) {
+      scored.set(candidate, (scored.get(candidate) ?? 0) + weight);
+    }
+  }
+
+  const ranked = [...scored.entries()].sort((a, b) => b[1] - a[1]);
+  return ranked[0]?.[0] ?? null;
+}
+
+async function tryAutoVerifyPairingPin(
+  adb: AdbClient,
+  rest: FireTvRestClient,
+): Promise<{ pin: string; token: string } | null> {
+  const attempts = 5;
+  for (let i = 0; i < attempts; i++) {
+    if (i > 0) {
+      await new Promise((resolve) => setTimeout(resolve, 1200));
+    }
+    const pin = await detectPairingPin(adb).catch(() => null);
+    if (!pin) continue;
+    try {
+      const token = await rest.verifyPin(pin);
+      return { pin, token };
+    } catch {
+      // Keep retrying in case the UI changed or a stale code was detected.
+    }
+  }
+  return null;
+}
+
 async function getScreenNodes(client: AdbClient): Promise<UiNode[]> {
   const xml = await client.getScreenXml();
   const parsed = parser.parse(xml) as { hierarchy?: { node?: UiNode[] | UiNode } };
@@ -209,6 +272,10 @@ export function registerTools(server: McpServer, adb: AdbClient, rest: FireTvRes
           const readyDevice = fireDevices.find((device) => device.state === 'device');
           if (readyDevice) {
             adb.setActiveSerial(readyDevice.serial);
+            const ip = serialToIp(readyDevice.serial);
+            if (ip) {
+              rest.setTargetIp(ip);
+            }
             autoSelectedSerial = readyDevice.serial;
           }
         }
@@ -302,7 +369,7 @@ export function registerTools(server: McpServer, adb: AdbClient, rest: FireTvRes
           const lines = [
             `ADB configured target: ${adb.configuredSerial ?? 'none (discovery mode)'}`,
             `ADB active target: ${adb.activeSerial ?? 'none selected'}`,
-            `REST configured: ${rest.configured ? 'yes' : 'no (set FIRETV_REST_API_KEY)'}`,
+            `REST configured: ${rest.configured ? 'yes' : 'no'}`,
             `REST paired: ${rest.ready ? 'yes' : 'no'}`,
           ];
           return ok(lines.join('\n'));
@@ -312,7 +379,7 @@ export function registerTools(server: McpServer, adb: AdbClient, rest: FireTvRes
           if (!pin) return err('pair verify_pin requires a 4-digit pin.');
           if (!rest.configured) {
             return err(
-              'REST pairing is not configured. Set FIRETV_REST_API_KEY in .env and restart the MCP server, then run pair start.',
+              'REST pairing is not configured yet. Run pair start first so the server can target your discovered Fire TV.',
             );
           }
           const token = await rest.verifyPin(pin);
@@ -355,6 +422,10 @@ export function registerTools(server: McpServer, adb: AdbClient, rest: FireTvRes
 
         if (target.state === 'device') {
           adb.setActiveSerial(target.serial);
+          const ip = serialToIp(target.serial);
+          if (ip) {
+            rest.setTargetIp(ip);
+          }
         }
 
         const lines = [
@@ -364,21 +435,22 @@ export function registerTools(server: McpServer, adb: AdbClient, rest: FireTvRes
             : `ADB state is "${target.state}". Accept the USB debugging trust prompt on TV, then run pair start again.`,
         ];
 
-        if (rest.configured) {
-          if (rest.ready) {
-            lines.push('REST pairing is already ready.');
-          } else if (target.state === 'device') {
-            await rest.displayPin(friendly_name ?? 'fire-tv-mcp');
+        if (rest.ready) {
+          lines.push('REST pairing is already ready.');
+        } else if (target.state === 'device') {
+          await rest.displayPin(friendly_name ?? 'fire-tv-mcp');
+          const auto = await tryAutoVerifyPairingPin(adb, rest);
+          if (auto) {
             lines.push(
-              'REST PIN displayed on TV. Run pair with action="verify_pin" and pin="<4-digit-PIN>" to complete fast pairing.',
+              `REST pairing auto-completed by reading on-screen PIN (${auto.pin}). Fast REST mode is now enabled.`,
             );
           } else {
-            lines.push('REST pairing will be available after ADB trust is completed.');
+            lines.push(
+              'REST PIN displayed on TV. Auto-detect could not verify it yet. Next: take a screenshot, read the 4-digit PIN, then run pair with action="verify_pin" and pin="<PIN>".',
+            );
           }
         } else {
-          lines.push(
-            'Optional: set FIRETV_REST_API_KEY in .env and restart if you want faster REST control after ADB pairing.',
-          );
+          lines.push('REST pairing will be available after ADB trust is completed.');
         }
 
         return ok(lines.join('\n'));
@@ -397,7 +469,7 @@ export function registerTools(server: McpServer, adb: AdbClient, rest: FireTvRes
       'Step 1: call with action="display_pin" — a 4-digit PIN appears on the TV screen.',
       'Step 2: call with action="verify_pin" and pin="<PIN>" — authenticates and saves the token.',
       'After setup, navigation commands automatically use the REST API (~50ms) instead of ADB (~100-500ms).',
-      'Requires FIRETV_REST_API_KEY in .env (any non-empty string works as the initial API key).',
+      'Uses FIRETV_REST_API_KEY when set, otherwise a default session key is used.',
     ].join(' '),
     {
       action: z.enum(['display_pin', 'verify_pin']).describe('Pairing step to perform'),
@@ -409,9 +481,7 @@ export function registerTools(server: McpServer, adb: AdbClient, rest: FireTvRes
     },
     async ({ action, pin, friendly_name }) => {
       if (!rest.configured) {
-        return err(
-          'FIRETV_REST_API_KEY is not set. Add it to .env (any non-empty string works as the initial key).',
-        );
+        return err('REST target is not configured yet. Run pair start first.');
       }
       try {
         if (action === 'display_pin') {

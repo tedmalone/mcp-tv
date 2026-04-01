@@ -80,9 +80,9 @@ export interface FireTvRestConfig {
  */
 export class FireTvRestClient {
   private readonly logger = createLogger('fire-tv-mcp/rest');
-  private readonly ip: string;
+  private ip: string;
   private readonly port: number;
-  private readonly apiKey: string;
+  private apiKey: string;
   private token: string | undefined;
   private readonly envPath: string;
 
@@ -103,6 +103,22 @@ export class FireTvRestClient {
   /** True when IP and API key are present (but token may not be set yet). */
   get configured(): boolean {
     return !!(this.ip && this.apiKey);
+  }
+
+  /** Update target IP at runtime (useful after discover auto-select). */
+  setTargetIp(ip: string): void {
+    const next = ip.trim();
+    if (!next || next === this.ip) return;
+    this.ip = next;
+    this.logger.info(`REST target IP set to ${next}`);
+  }
+
+  /** Set API key at runtime if not provided from env. */
+  setApiKey(apiKey: string): void {
+    const next = apiKey.trim();
+    if (!next || next === this.apiKey) return;
+    this.apiKey = next;
+    this.logger.info('REST API key initialized for this session.');
   }
 
   private get baseUrl(): string {

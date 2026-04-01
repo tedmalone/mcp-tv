@@ -1,0 +1,56 @@
+name: Release Artifacts
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Build Fire TV MCP
+        working-directory: fire-tv-mcp
+        run: |
+          npm ci
+          npm run build
+          tar -czf ../fire-tv-mcp-${GITHUB_REF_NAME}.tar.gz dist package.json package-lock.json .env.example
+
+      - name: Build Samsung TV MCP
+        working-directory: samsung-tv-mcp
+        run: |
+          npm ci
+          npm run build
+          tar -czf ../samsung-tv-mcp-${GITHUB_REF_NAME}.tar.gz dist package.json package-lock.json .env.example
+
+      - name: Build Apple TV MCP
+        working-directory: apple-tv-mcp
+        run: |
+          python -m pip install --upgrade pip
+          pip install build
+          python -m build
+          tar -czf ../apple-tv-mcp-${GITHUB_REF_NAME}.tar.gz dist pyproject.toml .env.example
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            fire-tv-mcp-${{ github.ref_name }}.tar.gz
+            samsung-tv-mcp-${{ github.ref_name }}.tar.gz
+            apple-tv-mcp-${{ github.ref_name }}.tar.gz
