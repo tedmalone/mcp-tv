@@ -3,6 +3,7 @@ import 'dotenv/config';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { SamsungTvClient } from './samsung-client.js';
+import { SmartThingsClient } from './smartthings-client.js';
 import { registerTools } from './tools.js';
 import { createLogger } from './logger.js';
 
@@ -10,6 +11,11 @@ const TV_IP = process.env.SAMSUNG_TV_IP;
 const TV_MAC = process.env.SAMSUNG_TV_MAC;
 const TV_NAME = process.env.SAMSUNG_TV_NAME || 'Claude MCP';
 const TV_TOKEN = process.env.SAMSUNG_TV_TOKEN || undefined;
+
+const ST_TOKEN = process.env.SAMSUNG_SMARTTHINGS_TOKEN || '';
+const ST_DEVICE_ID = process.env.SAMSUNG_SMARTTHINGS_DEVICE_ID || '';
+const ST_API_URL = process.env.SAMSUNG_SMARTTHINGS_API_URL || undefined;
+
 const logger = createLogger('samsung-tv-mcp');
 
 const client = new SamsungTvClient({
@@ -19,12 +25,14 @@ const client = new SamsungTvClient({
   token: TV_TOKEN,
 });
 
+const st = new SmartThingsClient(ST_TOKEN, ST_DEVICE_ID, ST_API_URL);
+
 const server = new McpServer({
   name: 'samsung-tv-mcp',
   version: '0.1.0',
 });
 
-registerTools(server, client);
+registerTools(server, client, st);
 
 async function main(): Promise<void> {
   const transport = new StdioServerTransport();
@@ -33,6 +41,9 @@ async function main(): Promise<void> {
   logger.info(`TV: ${TV_IP ?? 'not configured (use discover first)'} (${TV_NAME})`);
   logger.info(`MAC: ${TV_MAC ?? 'not configured (discover first)'}`);
   logger.info(`Token: ${TV_TOKEN ? 'configured' : 'awaiting first connection'}`);
+  logger.info(
+    `SmartThings: ${st.configured ? `configured (device ${ST_DEVICE_ID})` : 'not configured (set SAMSUNG_SMARTTHINGS_TOKEN + SAMSUNG_SMARTTHINGS_DEVICE_ID for reliable power-on and input switching)'}`,
+  );
 }
 
 main().catch((err) => {

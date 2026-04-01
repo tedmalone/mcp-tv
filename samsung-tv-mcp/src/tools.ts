@@ -2,9 +2,10 @@ import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { SamsungRestDevice, SamsungRestResponse } from './samsung-client.js';
 import { SamsungTvClient } from './samsung-client.js';
-import { sendWakeOnLan } from './wol.js';
+import { SmartThingsClient, toSmartThingsInput } from './smartthings-client.js';
+import { sendWakeOnLanBurst } from './wol.js';
 
-/** Samsung key code mapping for input sources */
+/** Samsung key code mapping for input sources (WebSocket fallback only) */
 const INPUT_KEY_CODES: Record<string, string> = {
   hdmi1: 'KEY_HDMI1',
   hdmi2: 'KEY_HDMI2',
@@ -24,17 +25,14 @@ const VALID_INPUTS = Object.keys(INPUT_KEY_CODES);
 const delay = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
 /**
- * Switch input via Samsung source picker grid.
+ * Switch input via Samsung source picker grid (WebSocket fallback).
  *
- * On newer Tizen models (2024+), KEY_HDMIx keycodes are ignored. The source grid
- * is the only reliable path. When opened via KEY_SOURCE, the grid always focuses the
- * current active input. The most recently used other input is always one step RIGHT
- * and one step UP from there. This matches the manually confirmed sequence from
- * device testing (QN55S95FAFXZA, 2025).
+ * On newer Tizen models (2024+) KEY_HDMIx keycodes are ignored. The source grid
+ * is the only reliable WebSocket path. When opened via KEY_SOURCE, the grid always
+ * focuses the current active input. The most recently used other input is always
+ * one step RIGHT and one step UP from there (confirmed on QN55S95FAFXZA, 2025).
  *
- * For inputs not in the "recently used" slot, use send_key with KEY_SOURCE and
- * navigate manually — Samsung's dynamic grid cannot be reliably addressed by
- * coordinates without visual feedback.
+ * Prefer SmartThings setInputSource when available — it is instant and reliable.
  */
 async function switchViaSourceGrid(client: SamsungTvClient): Promise<void> {
   const NAV_DELAY = 350;
@@ -115,7 +113,11 @@ function withHints(message: string): string {
   return message;
 }
 
-export function registerTools(server: McpServer, client: SamsungTvClient): void {
+export function registerTools(
+  server: McpServer,
+  client: SamsungTvClient,
+  st: SmartThingsClient,
+): void {
   server.tool(
     'discover',
     'Discover Samsung TVs on the local subnet and return setup metadata (including MAC when available).',
@@ -173,7 +175,6 @@ export function registerTools(server: McpServer, client: SamsungTvClient): void 
             const name = String(device.name ?? device.friendlyName ?? `Samsung TV (${targetIp})`);
             const model = String(device.modelName ?? device.model ?? '');
             const mac = String(device.wifiMac ?? device.mac ?? '').trim() || null;
-            // Auto-persist IP and MAC so user never has to enter them manually
             if (mac && (!client.ip || !client.mac)) {
               client.persistDiscovery(targetIp, mac);
             }
@@ -189,9 +190,7 @@ export function registerTools(server: McpServer, client: SamsungTvClient): void 
               next_step: mac
                 ? 'TV IP and MAC auto-saved. Run control tools directly. Wake-on-LAN is available.'
                 : 'TV found but MAC missing in API response. Control works; WoL may require manual MAC config.',
-              raw: {
-                device,
-              },
+              raw: { device },
             };
           } catch {
             return null;
@@ -219,28 +218,46 @@ export function registerTools(server: McpServer, client: SamsungTvClient): void 
 
   server.tool(
     'power',
-    'Turn the Samsung TV on or off. Power on uses Wake-on-LAN (requires Ethernet connection and "Power On with Mobile" enabled; unreliable over WiFi). Power off sends KEY_POWER via WebSocket.',
+    [
+      'Turn the Samsung TV on or off.',
+      'Power ON priority: (1) SmartThings API — instant and reliable (requires SAMSUNG_SMARTTHINGS_TOKEN + SAMSUNG_SMARTTHINGS_DEVICE_ID).',
+      '(2) Wake-on-LAN burst — sends 16 magic packets; requires TV "Power On with Mobile" enabled in Settings → General → Network → Expert Settings.',
+      'Power OFF: SmartThings if configured, otherwise sends KEY_POWER via WebSocket.',
+    ].join(' '),
     {
       action: z.enum(['on', 'off']).describe("'on' to wake the TV, 'off' to turn it off"),
     },
     async ({ action }) => {
       try {
         if (action === 'on') {
+          if (st.configured) {
+            await st.powerOn();
+            return ok('Power on sent via SmartThings API.');
+          }
+          // WoL burst fallback
           if (!client.mac) {
             return err(
-              'SAMSUNG_TV_MAC is not configured. Run discover first — it will auto-save the MAC.',
+              'Neither SmartThings (SAMSUNG_SMARTTHINGS_TOKEN + SAMSUNG_SMARTTHINGS_DEVICE_ID) nor ' +
+                'Wake-on-LAN (SAMSUNG_TV_MAC) is configured. Run discover first — it auto-saves the MAC.',
             );
           }
-          // Derive directed broadcast from TV IP (e.g. 192.168.6.209 → 192.168.6.255)
-          // to ensure WoL crosses subnet boundaries on mesh/VLAN networks.
           const broadcast =
             process.env.SAMSUNG_TV_WOL_BROADCAST ??
-            (client.ip ? client.ip.split('.').slice(0, 3).join('.') + '.255' : '255.255.255.255');
-          await sendWakeOnLan(client.mac, broadcast);
-          return ok('Wake-on-LAN magic packet sent. TV should power on within a few seconds.');
+            (client.ip
+              ? client.ip.split('.').slice(0, 3).join('.') + '.255'
+              : '255.255.255.255');
+          await sendWakeOnLanBurst(client.mac, broadcast);
+          return ok(
+            'Wake-on-LAN burst sent (16 packets). TV should power on within a few seconds.\n' +
+              'Tip: For more reliable power-on, configure SmartThings (SAMSUNG_SMARTTHINGS_TOKEN + SAMSUNG_SMARTTHINGS_DEVICE_ID).',
+          );
         } else {
+          if (st.configured) {
+            await st.powerOff();
+            return ok('Power off sent via SmartThings API.');
+          }
           await client.sendKey('KEY_POWER');
-          return ok('Power off command sent.');
+          return ok('Power off command sent via WebSocket.');
         }
       } catch (e) {
         return err(
@@ -312,24 +329,63 @@ export function registerTools(server: McpServer, client: SamsungTvClient): void 
 
   server.tool(
     'switch_input',
-    `Switch to the most recently used other input via the source picker grid. ` +
-      `On newer Samsung models (2024+) KEY_HDMIx keycodes are ignored — this tool uses ` +
-      `KEY_SOURCE → RIGHT → UP → ENTER, which navigates from the current active input to ` +
-      `the last-used other input (confirmed on QN55S95FAFXZA). The 'input' parameter is ` +
-      `accepted for API compatibility but the grid always selects the previously active source. ` +
-      `For arbitrary input selection use send_key with KEY_SOURCE and navigate manually.`,
+    [
+      `Switch the TV input source.`,
+      `Priority: (1) SmartThings setInputSource — direct, instant, works on all Tizen models (requires SAMSUNG_SMARTTHINGS_TOKEN + SAMSUNG_SMARTTHINGS_DEVICE_ID).`,
+      `(2) Source picker grid fallback — KEY_SOURCE → RIGHT → UP → ENTER, selects the previously active input (confirmed on QN55S95FAFXZA). Note: KEY_HDMIx keycodes are ignored on 2024+ models.`,
+      `Valid inputs: ${VALID_INPUTS.join(', ')}.`,
+    ].join(' '),
     {
       input: z.string().describe(`Input source name: ${VALID_INPUTS.join(', ')}`),
     },
     async ({ input }) => {
-      if (!INPUT_KEY_CODES[input.toLowerCase()]) {
+      const inputLower = input.toLowerCase();
+      if (!INPUT_KEY_CODES[inputLower]) {
         return err(`Unknown input '${input}'. Valid inputs: ${VALID_INPUTS.join(', ')}`);
       }
       try {
+        if (st.configured) {
+          const stInput = toSmartThingsInput(inputLower);
+          if (stInput) {
+            await st.setInputSource(stInput);
+            return ok(`Switched to ${stInput} via SmartThings API.`);
+          }
+        }
+        // WebSocket fallback: source grid navigation
         await switchViaSourceGrid(client);
-        return ok(`Switched input via source grid (KEY_SOURCE → RIGHT → UP → ENTER).`);
+        return ok(
+          `Switched input via source grid (KEY_SOURCE → RIGHT → UP → ENTER).\n` +
+            `Note: This selects the previously active input. For direct input selection, configure SmartThings.`,
+        );
       } catch (e) {
         return err(withHints(`Switch input failed: ${e instanceof Error ? e.message : String(e)}`));
+      }
+    },
+  );
+
+  // --- SmartThings info tool ---
+
+  server.tool(
+    'list_inputs',
+    'List available input sources from SmartThings API. Requires SAMSUNG_SMARTTHINGS_TOKEN and SAMSUNG_SMARTTHINGS_DEVICE_ID.',
+    {},
+    async () => {
+      if (!st.configured) {
+        return err(
+          'SmartThings not configured. Set SAMSUNG_SMARTTHINGS_TOKEN and SAMSUNG_SMARTTHINGS_DEVICE_ID to use this tool.',
+        );
+      }
+      try {
+        const sources = await st.getSupportedInputSources();
+        return ok(
+          sources.length > 0
+            ? `Supported input sources: ${sources.join(', ')}`
+            : 'No input sources returned (TV may be off or SmartThings integration not linked).',
+        );
+      } catch (e) {
+        return err(
+          `list_inputs failed: ${e instanceof Error ? e.message : String(e)}`,
+        );
       }
     },
   );
