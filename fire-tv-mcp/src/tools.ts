@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { XMLParser } from 'fast-xml-parser';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { AdbClient } from './adb-client.js';
+import { FireTvRestClient, toRestKey } from './firetv-rest-client.js';
 
 const parser = new XMLParser({
   ignoreAttributes: false,
@@ -37,7 +38,6 @@ function envInt(name: string, fallback: number): number {
   return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : fallback;
 }
 
-// Upper bound for press_keys delay to avoid accidental very slow macro execution.
 const DEFAULT_PRESS_KEYS_DELAY_MAX_MS = 5000;
 const PRESS_KEYS_DELAY_MAX_MS = envInt(
   'FIRETV_PRESS_KEYS_DELAY_MAX_MS',
@@ -81,10 +81,8 @@ function normalizeKey(key: string): string {
 }
 
 function encodeInputText(text: string): string {
-  // Escape characters that are special inside a double-quoted Android shell string,
-  // then encode spaces as %s which is what `input text` expects.
   return text
-    .replace(/\\/g, '\\\\') // backslash must come first
+    .replace(/\\/g, '\\\\')
     .replace(/"/g, '\\"')
     .replace(/\$/g, '\\$')
     .replace(/`/g, '\\`')
@@ -120,7 +118,37 @@ async function getScreenNodes(client: AdbClient): Promise<UiNode[]> {
   return extractNodes(parsed.hierarchy?.node);
 }
 
-export function registerTools(server: McpServer, client: AdbClient): void {
+/**
+ * Try a REST key press; if REST is not ready or fails, fall back to ADB.
+ * Returns a string describing which path was used.
+ */
+async function pressKeyHybrid(
+  key: string,
+  rest: FireTvRestClient,
+  adb: AdbClient,
+): Promise<string> {
+  if (rest.ready) {
+    const mapped = toRestKey(key);
+    if (mapped) {
+      try {
+        if (mapped.type === 'nav') {
+          await rest.sendNavKey(mapped.action);
+        } else {
+          await rest.sendMediaCommand(mapped.action, mapped.body);
+        }
+        return 'rest';
+      } catch {
+        // fall through to ADB
+      }
+    }
+  }
+  await adb.keyevent(normalizeKey(key));
+  return 'adb';
+}
+
+export function registerTools(server: McpServer, adb: AdbClient, rest: FireTvRestClient): void {
+  // --- Discovery ---
+
   server.tool(
     'discover',
     'Discover Fire TV / Android TV devices using adb mDNS and attached device list.',
@@ -128,8 +156,8 @@ export function registerTools(server: McpServer, client: AdbClient): void {
     async () => {
       try {
         const [mdns, devices] = await Promise.all([
-          client.listMdnsServices().catch(() => []),
-          client.listDevices().catch(() => []),
+          adb.listMdnsServices().catch(() => []),
+          adb.listDevices().catch(() => []),
         ]);
 
         const mappedMdns = mdns.map((service) => ({
@@ -143,11 +171,7 @@ export function registerTools(server: McpServer, client: AdbClient): void {
           confidence: 'medium',
           next_step:
             'If this is your Fire TV, set FIRETV_IP and run get_device_info (accept ADB trust prompt on TV if shown).',
-          raw: {
-            serviceType: service.serviceType,
-            port: service.port,
-            line: service.raw,
-          },
+          raw: { serviceType: service.serviceType, port: service.port, line: service.raw },
         }));
 
         const mappedDevices = devices.map((device) => {
@@ -177,14 +201,65 @@ export function registerTools(server: McpServer, client: AdbClient): void {
     },
   );
 
+  // --- REST pairing ---
+
+  server.tool(
+    'setup_rest',
+    [
+      'Set up the Fire TV REST API (port 8080) for fast, ADB-free control.',
+      'Step 1: call with action="display_pin" — a 4-digit PIN appears on the TV screen.',
+      'Step 2: call with action="verify_pin" and pin="<PIN>" — authenticates and saves the token.',
+      'After setup, navigation commands automatically use the REST API (~50ms) instead of ADB (~100-500ms).',
+      'Requires FIRETV_REST_API_KEY in .env (any non-empty string works as the initial API key).',
+    ].join(' '),
+    {
+      action: z.enum(['display_pin', 'verify_pin']).describe('Pairing step to perform'),
+      pin: z.string().optional().describe('4-digit PIN from TV screen (required for verify_pin)'),
+      friendly_name: z
+        .string()
+        .optional()
+        .describe('Name shown on TV during pairing (default: fire-tv-mcp)'),
+    },
+    async ({ action, pin, friendly_name }) => {
+      if (!rest.configured) {
+        return err(
+          'FIRETV_REST_API_KEY is not set. Add it to .env (any non-empty string works as the initial key).',
+        );
+      }
+      try {
+        if (action === 'display_pin') {
+          await rest.displayPin(friendly_name ?? 'fire-tv-mcp');
+          return ok(
+            'PIN displayed on TV. You have ~60 seconds to call setup_rest with action="verify_pin" and pin="<4-digit-PIN>".',
+          );
+        } else {
+          if (!pin) return err('pin is required for verify_pin action.');
+          const token = await rest.verifyPin(pin);
+          return ok(
+            `REST API authenticated. Token saved to .env as FIRETV_REST_TOKEN.\n` +
+              `Token: ${token}\n` +
+              `Navigation commands will now use the REST API automatically.`,
+          );
+        }
+      } catch (e) {
+        return err(`setup_rest failed: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    },
+  );
+
+  // --- Navigation (hybrid: REST fast path, ADB fallback) ---
+
   server.tool(
     'press_key',
-    'Press a single Fire TV key (friendly names like up/down/home/back or raw KEYCODE_*).',
+    [
+      'Press a single Fire TV key (friendly names like up/down/home/back or raw KEYCODE_*).',
+      'Uses REST API (~50ms) when configured, falls back to ADB (~100-500ms).',
+    ].join(' '),
     { key: z.string().min(1) },
     async ({ key }) => {
       try {
-        await client.keyevent(normalizeKey(key));
-        return ok(`Pressed key: ${key}`);
+        const path = await pressKeyHybrid(key, rest, adb);
+        return ok(`Pressed key: ${key} (via ${path})`);
       } catch (e) {
         return err(withHints(`press_key failed: ${e instanceof Error ? e.message : String(e)}`));
       }
@@ -193,7 +268,10 @@ export function registerTools(server: McpServer, client: AdbClient): void {
 
   server.tool(
     'press_keys',
-    'Press multiple keys in sequence with an optional delay.',
+    [
+      'Press multiple keys in sequence with an optional delay.',
+      'Uses REST API when configured, falls back to ADB.',
+    ].join(' '),
     {
       keys: z.array(z.string().min(1)).min(1),
       delayMs: z.number().int().min(0).max(PRESS_KEYS_DELAY_MAX_MS).optional(),
@@ -201,7 +279,7 @@ export function registerTools(server: McpServer, client: AdbClient): void {
     async ({ keys, delayMs }) => {
       try {
         for (const key of keys) {
-          await client.keyevent(normalizeKey(key));
+          await pressKeyHybrid(key, rest, adb);
           if ((delayMs ?? 0) > 0) {
             await new Promise((resolve) => setTimeout(resolve, delayMs));
           }
@@ -213,31 +291,43 @@ export function registerTools(server: McpServer, client: AdbClient): void {
     },
   );
 
-  server.tool('go_home', 'Go to the Fire TV home screen.', {}, async () => {
-    try {
-      await client.keyevent('KEYCODE_HOME');
-      return ok('Sent KEYCODE_HOME.');
-    } catch (e) {
-      return err(withHints(`go_home failed: ${e instanceof Error ? e.message : String(e)}`));
-    }
-  });
+  server.tool(
+    'go_home',
+    'Go to the Fire TV home screen. Uses REST API when configured, falls back to ADB.',
+    {},
+    async () => {
+      try {
+        const path = await pressKeyHybrid('home', rest, adb);
+        return ok(`Sent home (via ${path}).`);
+      } catch (e) {
+        return err(withHints(`go_home failed: ${e instanceof Error ? e.message : String(e)}`));
+      }
+    },
+  );
 
-  server.tool('go_back', 'Go back on the Fire TV.', {}, async () => {
-    try {
-      await client.keyevent('KEYCODE_BACK');
-      return ok('Sent KEYCODE_BACK.');
-    } catch (e) {
-      return err(withHints(`go_back failed: ${e instanceof Error ? e.message : String(e)}`));
-    }
-  });
+  server.tool(
+    'go_back',
+    'Go back on the Fire TV. Uses REST API when configured, falls back to ADB.',
+    {},
+    async () => {
+      try {
+        const path = await pressKeyHybrid('back', rest, adb);
+        return ok(`Sent back (via ${path}).`);
+      } catch (e) {
+        return err(withHints(`go_back failed: ${e instanceof Error ? e.message : String(e)}`));
+      }
+    },
+  );
+
+  // --- Text input (ADB only) ---
 
   server.tool(
     'type_text',
-    'Type text into the currently focused input.',
+    'Type text into the currently focused input. Requires ADB.',
     { text: z.string() },
     async ({ text }) => {
       try {
-        await client.shell(`input text "${encodeInputText(text)}"`);
+        await adb.shell(`input text "${encodeInputText(text)}"`);
         return ok('Typed text.');
       } catch (e) {
         return err(withHints(`type_text failed: ${e instanceof Error ? e.message : String(e)}`));
@@ -245,47 +335,67 @@ export function registerTools(server: McpServer, client: AdbClient): void {
     },
   );
 
+  // --- App launch (hybrid) ---
+
   server.tool(
     'launch_app',
-    'Launch app by package name (or full component for am start).',
+    [
+      'Launch app by package name.',
+      'Uses REST API when configured (faster, no adb binary needed), falls back to ADB.',
+    ].join(' '),
     { package: z.string().min(1) },
     async ({ package: pkg }) => {
       try {
-        await client.shell(`monkey -p ${pkg} -c android.intent.category.LAUNCHER 1`);
-        return ok(`Launch command sent for package: ${pkg}`);
+        if (rest.ready) {
+          try {
+            await rest.launchApp(pkg);
+            return ok(`Launched ${pkg} (via REST)`);
+          } catch {
+            // fall through to ADB
+          }
+        }
+        await adb.shell(`monkey -p ${pkg} -c android.intent.category.LAUNCHER 1`);
+        return ok(`Launch command sent for package: ${pkg} (via ADB)`);
       } catch (e) {
         return err(withHints(`launch_app failed: ${e instanceof Error ? e.message : String(e)}`));
       }
     },
   );
 
-  server.tool('list_apps', 'List installed third-party apps.', {}, async () => {
+  // --- ADB-only tools ---
+
+  server.tool('list_apps', 'List installed third-party apps (requires ADB).', {}, async () => {
     try {
-      const out = await client.shell('pm list packages -3');
+      const out = await adb.shell('pm list packages -3');
       return ok(out);
     } catch (e) {
       return err(withHints(`list_apps failed: ${e instanceof Error ? e.message : String(e)}`));
     }
   });
 
-  server.tool('get_current_app', 'Get current foreground activity/app.', {}, async () => {
-    try {
-      const out = await client.shell('dumpsys activity activities | grep mResumedActivity');
-      return ok(out);
-    } catch (e) {
-      return err(
-        withHints(`get_current_app failed: ${e instanceof Error ? e.message : String(e)}`),
-      );
-    }
-  });
+  server.tool(
+    'get_current_app',
+    'Get current foreground activity/app (requires ADB).',
+    {},
+    async () => {
+      try {
+        const out = await adb.shell('dumpsys activity activities | grep mResumedActivity');
+        return ok(out);
+      } catch (e) {
+        return err(
+          withHints(`get_current_app failed: ${e instanceof Error ? e.message : String(e)}`),
+        );
+      }
+    },
+  );
 
   server.tool(
     'deep_link',
-    'Open a deep link URI on the Fire TV.',
+    'Open a deep link URI on the Fire TV (requires ADB).',
     { uri: z.string().url() },
     async ({ uri }) => {
       try {
-        await client.shell(`am start -a android.intent.action.VIEW -d "${uri}"`);
+        await adb.shell(`am start -a android.intent.action.VIEW -d "${uri}"`);
         return ok(`Opened URI: ${uri}`);
       } catch (e) {
         return err(withHints(`deep_link failed: ${e instanceof Error ? e.message : String(e)}`));
@@ -293,67 +403,78 @@ export function registerTools(server: McpServer, client: AdbClient): void {
     },
   );
 
-  server.tool('screenshot', 'Capture a screenshot and return base64 PNG.', {}, async () => {
-    try {
-      const pngBase64 = await client.screenshotBase64();
-      return ok(pngBase64);
-    } catch (e) {
-      return err(withHints(`screenshot failed: ${e instanceof Error ? e.message : String(e)}`));
-    }
-  });
+  server.tool(
+    'screenshot',
+    'Capture a screenshot and return base64 PNG (requires ADB).',
+    {},
+    async () => {
+      try {
+        const pngBase64 = await adb.screenshotBase64();
+        return ok(pngBase64);
+      } catch (e) {
+        return err(withHints(`screenshot failed: ${e instanceof Error ? e.message : String(e)}`));
+      }
+    },
+  );
 
-  server.tool('list_devices', 'List ADB devices currently visible to host.', {}, async () => {
-    try {
-      const devices = await client.listDevices();
-      return ok(JSON.stringify(devices, null, 2));
-    } catch (e) {
-      return err(withHints(`list_devices failed: ${e instanceof Error ? e.message : String(e)}`));
-    }
-  });
+  server.tool(
+    'list_devices',
+    'List ADB devices currently visible to host.',
+    {},
+    async () => {
+      try {
+        const devices = await adb.listDevices();
+        return ok(JSON.stringify(devices, null, 2));
+      } catch (e) {
+        return err(
+          withHints(`list_devices failed: ${e instanceof Error ? e.message : String(e)}`),
+        );
+      }
+    },
+  );
 
-  server.tool('get_device_info', 'Get basic Fire TV properties via getprop.', {}, async () => {
-    try {
-      const [model, release, sdk, serial] = await Promise.all([
-        client.shell('getprop ro.product.model'),
-        client.shell('getprop ro.build.version.release'),
-        client.shell('getprop ro.build.version.sdk'),
-        client.shell('getprop ro.serialno'),
-      ]);
-      return ok(
-        JSON.stringify(
-          {
-            model,
-            androidVersion: release,
-            sdk,
-            serial,
-          },
-          null,
-          2,
-        ),
-      );
-    } catch (e) {
-      return err(
-        withHints(`get_device_info failed: ${e instanceof Error ? e.message : String(e)}`),
-      );
-    }
-  });
+  server.tool(
+    'get_device_info',
+    'Get basic Fire TV properties via getprop (requires ADB).',
+    {},
+    async () => {
+      try {
+        const [model, release, sdk, serial] = await Promise.all([
+          adb.shell('getprop ro.product.model'),
+          adb.shell('getprop ro.build.version.release'),
+          adb.shell('getprop ro.build.version.sdk'),
+          adb.shell('getprop ro.serialno'),
+        ]);
+        return ok(JSON.stringify({ model, androidVersion: release, sdk, serial }, null, 2));
+      } catch (e) {
+        return err(
+          withHints(`get_device_info failed: ${e instanceof Error ? e.message : String(e)}`),
+        );
+      }
+    },
+  );
 
-  server.tool('sleep', 'Put Fire TV to sleep.', {}, async () => {
-    try {
-      await client.keyevent('KEYCODE_SLEEP');
-      return ok('Sent KEYCODE_SLEEP.');
-    } catch (e) {
-      return err(withHints(`sleep failed: ${e instanceof Error ? e.message : String(e)}`));
-    }
-  });
+  server.tool(
+    'sleep',
+    'Put Fire TV to sleep. Uses REST API when configured, falls back to ADB.',
+    {},
+    async () => {
+      try {
+        const path = await pressKeyHybrid('sleep', rest, adb);
+        return ok(`Sent sleep (via ${path}).`);
+      } catch (e) {
+        return err(withHints(`sleep failed: ${e instanceof Error ? e.message : String(e)}`));
+      }
+    },
+  );
 
   server.tool(
     'set_volume',
-    'Set media volume (stream 3) to a level between 0 and 25.',
+    'Set media volume (stream 3) to a level between 0 and 25 (requires ADB).',
     { level: z.number().int().min(0).max(25) },
     async ({ level }) => {
       try {
-        await client.shell(`media volume --set ${level} --stream 3`);
+        await adb.shell(`media volume --set ${level} --stream 3`);
         return ok(`Set media volume to ${level}.`);
       } catch (e) {
         return err(withHints(`set_volume failed: ${e instanceof Error ? e.message : String(e)}`));
@@ -361,9 +482,9 @@ export function registerTools(server: McpServer, client: AdbClient): void {
     },
   );
 
-  server.tool('get_volume', 'Read current media volume (stream 3).', {}, async () => {
+  server.tool('get_volume', 'Read current media volume (stream 3, requires ADB).', {}, async () => {
     try {
-      const out = await client.shell('media volume --get --stream 3');
+      const out = await adb.shell('media volume --get --stream 3');
       return ok(out);
     } catch (e) {
       return err(withHints(`get_volume failed: ${e instanceof Error ? e.message : String(e)}`));
@@ -372,41 +493,52 @@ export function registerTools(server: McpServer, client: AdbClient): void {
 
   server.tool(
     'seek',
-    'Seek forward or backward by seconds (positive = forward, negative = backward). Each press = 15s. Always resumes playback after seeking.',
+    [
+      'Seek forward or backward by seconds (positive = forward, negative = backward). Each press = 15s.',
+      'Always resumes playback after seeking.',
+      'Uses REST API media scan when configured, falls back to ADB keyevents.',
+    ].join(' '),
     { seconds: z.number().int() },
     async ({ seconds }) => {
       try {
         const presses = Math.max(1, Math.round(Math.abs(seconds) / 15));
-        const key = seconds >= 0 ? 'KEYCODE_MEDIA_FAST_FORWARD' : 'KEYCODE_MEDIA_REWIND';
-        await client.keyevent('KEYCODE_MEDIA_PAUSE');
+        const keyName = seconds >= 0 ? 'fast_forward' : 'rewind';
+        await adb.keyevent('KEYCODE_MEDIA_PAUSE');
         for (let i = 0; i < presses; i++) {
-          await client.keyevent(key);
+          await pressKeyHybrid(keyName, rest, adb);
         }
-        await client.keyevent('KEYCODE_MEDIA_PLAY');
+        await adb.keyevent('KEYCODE_MEDIA_PLAY');
         const direction = seconds >= 0 ? 'forward' : 'backward';
-        return ok(`Seeked ${direction} ~${presses * 15}s (${presses} presses) and resumed playback.`);
+        return ok(
+          `Seeked ${direction} ~${presses * 15}s (${presses} presses) and resumed playback.`,
+        );
       } catch (e) {
         return err(withHints(`seek failed: ${e instanceof Error ? e.message : String(e)}`));
       }
     },
   );
 
-  server.tool('mute', 'Toggle mute.', {}, async () => {
-    try {
-      await client.keyevent('KEYCODE_MUTE');
-      return ok('Sent KEYCODE_MUTE.');
-    } catch (e) {
-      return err(withHints(`mute failed: ${e instanceof Error ? e.message : String(e)}`));
-    }
-  });
-
   server.tool(
-    'get_screen_content',
-    'Dump Android UI hierarchy and return flattened JSON nodes.',
+    'mute',
+    'Toggle mute. Uses REST API when configured, falls back to ADB.',
     {},
     async () => {
       try {
-        const nodes = await getScreenNodes(client);
+        const path = await pressKeyHybrid('mute', rest, adb);
+        return ok(`Sent mute (via ${path}).`);
+      } catch (e) {
+        return err(withHints(`mute failed: ${e instanceof Error ? e.message : String(e)}`));
+      }
+    },
+  );
+
+  server.tool(
+    'get_screen_content',
+    'Dump Android UI hierarchy and return flattened JSON nodes (requires ADB).',
+    {},
+    async () => {
+      try {
+        const nodes = await getScreenNodes(adb);
         const formatted = nodes.map((node) => ({
           text: node.text ?? '',
           contentDesc: node['content-desc'] ?? '',
@@ -426,7 +558,7 @@ export function registerTools(server: McpServer, client: AdbClient): void {
 
   server.tool(
     'click_node',
-    'Find a node by text/content description and tap its center coordinates.',
+    'Find a node by text/content description and tap its center coordinates (requires ADB).',
     {
       query: z.string().min(1),
       field: z.enum(['text', 'content-desc', 'either']).optional(),
@@ -434,7 +566,7 @@ export function registerTools(server: McpServer, client: AdbClient): void {
     },
     async ({ query, field, exact }) => {
       try {
-        const nodes = await getScreenNodes(client);
+        const nodes = await getScreenNodes(adb);
         const mode = field ?? 'either';
         const queryNormalized = query.toLowerCase();
 
@@ -458,7 +590,7 @@ export function registerTools(server: McpServer, client: AdbClient): void {
         }
 
         const { x, y } = parseBounds(match.bounds);
-        await client.tap(x, y);
+        await adb.tap(x, y);
         return ok(`Tapped node at (${Math.round(x)}, ${Math.round(y)}) for query: ${query}`);
       } catch (e) {
         return err(withHints(`click_node failed: ${e instanceof Error ? e.message : String(e)}`));
