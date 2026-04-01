@@ -24,7 +24,7 @@ const server = new McpServer({
   version: '0.1.0',
 });
 
-registerTools(server, client, TV_MAC || undefined);
+registerTools(server, client);
 
 async function main(): Promise<void> {
   const transport = new StdioServerTransport();

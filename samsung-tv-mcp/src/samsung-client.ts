@@ -103,6 +103,41 @@ export class SamsungTvClient {
     return this.config.ip;
   }
 
+  get mac(): string | undefined {
+    return this.config.mac;
+  }
+
+  /** Persist discovered IP and MAC to .env so they survive restarts */
+  persistDiscovery(ip: string, mac: string): void {
+    try {
+      let envContent = '';
+      try {
+        envContent = readFileSync(this.envPath, 'utf-8');
+      } catch {
+        // .env doesn't exist yet — that's fine
+      }
+
+      if (envContent.includes('SAMSUNG_TV_IP=')) {
+        envContent = envContent.replace(/SAMSUNG_TV_IP=.*/, `SAMSUNG_TV_IP=${ip}`);
+      } else {
+        envContent += `\nSAMSUNG_TV_IP=${ip}\n`;
+      }
+
+      if (envContent.includes('SAMSUNG_TV_MAC=')) {
+        envContent = envContent.replace(/SAMSUNG_TV_MAC=.*/, `SAMSUNG_TV_MAC=${mac}`);
+      } else {
+        envContent += `SAMSUNG_TV_MAC=${mac}\n`;
+      }
+
+      writeFileSync(this.envPath, envContent);
+      this.config.ip = ip;
+      this.config.mac = mac;
+      this.logger.info(`Persisted TV IP (${ip}) and MAC (${mac}) to .env.`);
+    } catch (err) {
+      this.logger.warn(`Could not persist discovery to .env: ${String(err)}`);
+    }
+  }
+
   /** Build the Samsung WebSocket URL with optional auth token */
   private buildUrl(): string {
     if (!this.config.ip) {

@@ -89,11 +89,7 @@ function withHints(message: string): string {
   return message;
 }
 
-export function registerTools(
-  server: McpServer,
-  client: SamsungTvClient,
-  macAddress?: string,
-): void {
+export function registerTools(server: McpServer, client: SamsungTvClient): void {
   server.tool(
     'discover',
     'Discover Samsung TVs on the local subnet and return setup metadata (including MAC when available).',
@@ -148,18 +144,22 @@ export function registerTools(
             const name = String(device.name ?? device.friendlyName ?? `Samsung TV (${targetIp})`);
             const model = String(device.modelName ?? device.model ?? '');
             const mac = String(device.wifiMac ?? device.mac ?? '').trim() || null;
+            // Auto-persist IP and MAC so user never has to enter them manually
+            if (mac && (!client.ip || !client.mac)) {
+              client.persistDiscovery(targetIp, mac);
+            }
             return {
               id: `samsung_tv:${targetIp}`,
-              brand: 'samsung_tv',
+              brand: 'samsung_tv' as const,
               ip: targetIp,
               name,
               model: model || null,
               mac,
-              status: mac ? 'ready' : 'reachable',
-              confidence: 'high',
+              status: (mac ? 'ready' : 'reachable') as 'ready' | 'reachable',
+              confidence: 'high' as const,
               next_step: mac
-                ? 'Run control tools directly. Wake-on-LAN is available.'
-                : 'TV found but MAC missing in API response. Control works; WoL may require fallback lookup.',
+                ? 'TV IP and MAC auto-saved. Run control tools directly. Wake-on-LAN is available.'
+                : 'TV found but MAC missing in API response. Control works; WoL may require manual MAC config.',
               raw: {
                 device,
               },
@@ -197,12 +197,12 @@ export function registerTools(
     async ({ action }) => {
       try {
         if (action === 'on') {
-          if (!macAddress) {
+          if (!client.mac) {
             return err(
-              'SAMSUNG_TV_MAC is not configured. Run discover and save a MAC address before using power on.',
+              'SAMSUNG_TV_MAC is not configured. Run discover first — it will auto-save the MAC.',
             );
           }
-          await sendWakeOnLan(macAddress);
+          await sendWakeOnLan(client.mac);
           return ok('Wake-on-LAN magic packet sent. TV should power on within a few seconds.');
         } else {
           await client.sendKey('KEY_POWER');
