@@ -18,7 +18,7 @@ __pycache__/
 *.pyc
 *.pyo
 *.egg-info/
-.venv/
+.venv*/
 venv/
 .mypy_cache/
 .ruff_cache/
