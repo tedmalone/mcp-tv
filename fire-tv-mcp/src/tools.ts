@@ -19,7 +19,11 @@ const KEYCODES: Record<string, string> = {
   back: 'KEYCODE_BACK',
   home: 'KEYCODE_HOME',
   menu: 'KEYCODE_MENU',
+  play: 'KEYCODE_MEDIA_PLAY',
+  pause: 'KEYCODE_MEDIA_PAUSE',
   play_pause: 'KEYCODE_MEDIA_PLAY_PAUSE',
+  rewind: 'KEYCODE_MEDIA_REWIND',
+  fast_forward: 'KEYCODE_MEDIA_FAST_FORWARD',
   sleep: 'KEYCODE_SLEEP',
   volume_up: 'KEYCODE_VOLUME_UP',
   volume_down: 'KEYCODE_VOLUME_DOWN',
@@ -365,6 +369,27 @@ export function registerTools(server: McpServer, client: AdbClient): void {
       return err(withHints(`get_volume failed: ${e instanceof Error ? e.message : String(e)}`));
     }
   });
+
+  server.tool(
+    'seek',
+    'Seek forward or backward by seconds (positive = forward, negative = backward). Each press = 15s. Always resumes playback after seeking.',
+    { seconds: z.number().int() },
+    async ({ seconds }) => {
+      try {
+        const presses = Math.max(1, Math.round(Math.abs(seconds) / 15));
+        const key = seconds >= 0 ? 'KEYCODE_MEDIA_FAST_FORWARD' : 'KEYCODE_MEDIA_REWIND';
+        await client.keyevent('KEYCODE_MEDIA_PAUSE');
+        for (let i = 0; i < presses; i++) {
+          await client.keyevent(key);
+        }
+        await client.keyevent('KEYCODE_MEDIA_PLAY');
+        const direction = seconds >= 0 ? 'forward' : 'backward';
+        return ok(`Seeked ${direction} ~${presses * 15}s (${presses} presses) and resumed playback.`);
+      } catch (e) {
+        return err(withHints(`seek failed: ${e instanceof Error ? e.message : String(e)}`));
+      }
+    },
+  );
 
   server.tool('mute', 'Toggle mute.', {}, async () => {
     try {
