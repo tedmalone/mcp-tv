@@ -280,6 +280,114 @@ export function registerTools(server: McpServer, adb: AdbClient, rest: FireTvRes
     },
   );
 
+  // --- Friendly pairing flow ---
+
+  server.tool(
+    'pair',
+    [
+      'User-friendly pairing flow for Fire TV.',
+      'Use action="start" to discover and connect via ADB, then optionally begin REST PIN pairing.',
+      'Use action="verify_pin" with pin="<4-digit>" to finish REST pairing.',
+      'Use action="status" to see current ADB/REST pairing state.',
+    ].join(' '),
+    {
+      action: z.enum(['start', 'verify_pin', 'status']).optional(),
+      pin: z.string().optional(),
+      friendly_name: z.string().optional(),
+    },
+    async ({ action, pin, friendly_name }) => {
+      const step = action ?? 'start';
+      try {
+        if (step === 'status') {
+          const lines = [
+            `ADB configured target: ${adb.configuredSerial ?? 'none (discovery mode)'}`,
+            `ADB active target: ${adb.activeSerial ?? 'none selected'}`,
+            `REST configured: ${rest.configured ? 'yes' : 'no (set FIRETV_REST_API_KEY)'}`,
+            `REST paired: ${rest.ready ? 'yes' : 'no'}`,
+          ];
+          return ok(lines.join('\n'));
+        }
+
+        if (step === 'verify_pin') {
+          if (!pin) return err('pair verify_pin requires a 4-digit pin.');
+          if (!rest.configured) {
+            return err(
+              'REST pairing is not configured. Set FIRETV_REST_API_KEY in .env and restart the MCP server, then run pair start.',
+            );
+          }
+          const token = await rest.verifyPin(pin);
+          return ok(
+            [
+              'REST pairing complete.',
+              'Fast REST path is now enabled for supported navigation/media tools.',
+              `Saved token: ${token}`,
+            ].join('\n'),
+          );
+        }
+
+        const mdns = await adb.listMdnsServices().catch(() => []);
+        const mdnsTargets = Array.from(
+          new Set(
+            mdns
+              .filter((service) => service.address && service.port)
+              .map((service) => `${service.address}:${service.port}`),
+          ),
+        );
+        for (const serial of mdnsTargets) {
+          await adb.runAdb(['connect', serial]).catch(() => undefined);
+        }
+
+        const devices = await adb.listDevices().catch(() => []);
+        const fireDevices = devices.filter(isLikelyFireTvDevice);
+        const ready = fireDevices.find((d) => d.state === 'device') ?? null;
+        const fallback = fireDevices[0] ?? null;
+        const target = ready ?? fallback;
+
+        if (!target) {
+          return err(
+            [
+              'No likely Fire TV devices found yet.',
+              'Make sure ADB debugging is enabled on Fire TV and the TV is on the same network.',
+              'Then run pair start again.',
+            ].join('\n'),
+          );
+        }
+
+        if (target.state === 'device') {
+          adb.setActiveSerial(target.serial);
+        }
+
+        const lines = [
+          `Found Fire TV candidate: ${target.serial} (${target.details.model ?? 'unknown model'})`,
+          target.state === 'device'
+            ? 'ADB pairing is ready.'
+            : `ADB state is "${target.state}". Accept the USB debugging trust prompt on TV, then run pair start again.`,
+        ];
+
+        if (rest.configured) {
+          if (rest.ready) {
+            lines.push('REST pairing is already ready.');
+          } else if (target.state === 'device') {
+            await rest.displayPin(friendly_name ?? 'fire-tv-mcp');
+            lines.push(
+              'REST PIN displayed on TV. Run pair with action="verify_pin" and pin="<4-digit-PIN>" to complete fast pairing.',
+            );
+          } else {
+            lines.push('REST pairing will be available after ADB trust is completed.');
+          }
+        } else {
+          lines.push(
+            'Optional: set FIRETV_REST_API_KEY in .env and restart if you want faster REST control after ADB pairing.',
+          );
+        }
+
+        return ok(lines.join('\n'));
+      } catch (e) {
+        return err(withHints(`pair failed: ${e instanceof Error ? e.message : String(e)}`));
+      }
+    },
+  );
+
   // --- REST pairing ---
 
   server.tool(
