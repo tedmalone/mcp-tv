@@ -211,6 +211,12 @@ class AtvClient:
             raise RuntimeError("Pairing failed — PIN may be incorrect")
 
         creds = pairing.service.credentials
+        if not creds:
+            await pairing.close()
+            self._active_pairing = None
+            raise RuntimeError(
+                "Pairing reported success but returned no credentials — pairing incomplete."
+            )
         self._stored_credentials[protocol.name] = creds
         self._save_credentials()
         await pairing.close()

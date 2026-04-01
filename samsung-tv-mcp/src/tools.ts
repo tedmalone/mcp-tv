@@ -141,6 +141,9 @@ export function registerTools(server: McpServer, client: SamsungTvClient): void 
       try {
         const scanStart = start ?? DISCOVERY_SCAN_START;
         const scanEnd = end ?? DISCOVERY_SCAN_END;
+        if (scanStart > scanEnd) {
+          return err(`Invalid scan range: start (${scanStart}) must be <= end (${scanEnd}).`);
+        }
         const effectiveSubnet =
           subnet ?? (client.ip ? client.ip.split('.').slice(0, 3).join('.') : undefined);
         if (!ip && !effectiveSubnet) {
@@ -293,14 +296,12 @@ export function registerTools(server: McpServer, client: SamsungTvClient): void 
 
   server.tool(
     'mute',
-    'Toggle mute on the Samsung TV',
-    {
-      mute: z.boolean().describe('true to mute, false to unmute (sends KEY_MUTE toggle)'),
-    },
+    'Toggle mute on the Samsung TV. Sends KEY_MUTE regardless of current state — the TV toggles on each call. There is no way to read current mute state via this API.',
+    {},
     async () => {
       try {
         await client.sendKey('KEY_MUTE');
-        return ok('Mute toggle sent.');
+        return ok('Mute toggled.');
       } catch (e) {
         return err(withHints(`Mute failed: ${e instanceof Error ? e.message : String(e)}`));
       }
