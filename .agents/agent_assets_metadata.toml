@@ -1,8 +1,0 @@
-uploads = []
-outputs = []
-
-[[generated]]
-id = "lEJcMLkCY0LvA697sqkSN"
-uri = "file://ios-app/assets/images/icon.png"
-type = "image"
-title = "tv remote app icon"
