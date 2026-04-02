@@ -49,7 +49,7 @@ export function sendWakeOnLan(
   macAddress: string,
   broadcastAddr = '255.255.255.255',
 ): Promise<void> {
-  return sendOnce(buildMagicPacket(macAddress), broadcastAddr);
+  return Promise.resolve().then(() => sendOnce(buildMagicPacket(macAddress), broadcastAddr));
 }
 
 /**
