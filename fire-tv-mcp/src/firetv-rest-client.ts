@@ -72,12 +72,23 @@ export interface FireTvRestConfig {
  *   All subsequent calls use the saved token automatically.
  *
  * Required env vars:
- *   FIRETV_REST_API_KEY   — any non-empty string; the TV accepts any key during pairing
  *   FIRETV_REST_TOKEN     — auto-populated after first successful verifyPin()
+ *
+ * Optional env vars:
+ *   FIRETV_REST_API_KEY   — client identifier sent as X-Api-Key; defaults to 'fire-tv-mcp'.
+ *                           The TV accepts any non-empty string during pairing.
+ *
+ * Service lifecycle: the REST service (port 8080) shuts down after a few minutes of inactivity.
+ * Every request automatically wakes it via DIAL (port 8009 → POST /apps/FireTVRemote) when
+ * the idle threshold is exceeded, then waits 1.5s for startup before proceeding.
  *
  * Optional:
  *   FIRETV_REST_PORT      — default 8080
  */
+// The REST service shuts down after a few minutes of inactivity. Re-wake if
+// we haven't made a successful call within this window.
+const REST_IDLE_WAKE_THRESHOLD_MS = 60 * 1000;
+
 export class FireTvRestClient {
   private readonly logger = createLogger('fire-tv-mcp/rest');
   private ip: string;
@@ -85,6 +96,7 @@ export class FireTvRestClient {
   private apiKey: string;
   private token: string | undefined;
   private readonly envPath: string;
+  private lastSuccessfulCallTime = 0;
 
   constructor(config: FireTvRestConfig) {
     this.ip = config.ip;
@@ -141,6 +153,7 @@ export class FireTvRestClient {
     url: string,
     opts: { body?: string; headers?: Record<string, string> } = {},
   ): Promise<void> {
+    await this.ensureAwake();
     const res = await fetch(url, {
       method: 'POST',
       headers: opts.headers ?? this.buildHeaders(),
@@ -153,6 +166,33 @@ export class FireTvRestClient {
       const body = await res.text().catch(() => '');
       throw new Error(`Fire TV REST ${res.status} for ${url}: ${body || '(empty)'}`);
     }
+    this.lastSuccessfulCallTime = Date.now();
+  }
+
+  /**
+   * Ensure the Fire TV REST service is running before making a request.
+   *
+   * The service (port 8080) shuts down after a few minutes of inactivity and
+   * must be restarted via DIAL (port 8009 → POST /apps/FireTVRemote).
+   * This is called before every REST request but only incurs the 1.5s startup
+   * wait when the service has been idle long enough to have gone to sleep.
+   */
+  private async ensureAwake(): Promise<void> {
+    const idleMs = Date.now() - this.lastSuccessfulCallTime;
+    if (idleMs <= REST_IDLE_WAKE_THRESHOLD_MS) return;
+
+    const dialUrl = `http://${this.ip}:8009/apps/FireTVRemote`;
+    try {
+      await fetch(dialUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain; charset=UTF-8' },
+        signal: AbortSignal.timeout(5000),
+      });
+      this.logger.info('DIAL wake sent to FireTVRemote — waiting for REST service to start.');
+      await new Promise((r) => setTimeout(r, 1500));
+    } catch (err) {
+      this.logger.warn(`DIAL wake failed (service may already be running): ${String(err)}`);
+    }
   }
 
   /**
@@ -160,6 +200,7 @@ export class FireTvRestClient {
    * The PIN expires after ~60 seconds.
    */
   async displayPin(friendlyName = 'fire-tv-mcp'): Promise<void> {
+    await this.ensureAwake();
     await this.request(`${this.baseUrl}/v1/FireTV/pin/display`, {
       headers: this.buildHeaders(false),
       body: JSON.stringify({ friendlyName }),
@@ -193,6 +234,7 @@ export class FireTvRestClient {
     }
     this.token = token;
     this.persistToken(token);
+    this.lastSuccessfulCallTime = Date.now();
     this.logger.info('REST auth token saved.');
     return token;
   }
