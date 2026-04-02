@@ -70,6 +70,10 @@ async def discover(timeout_seconds: int = DEFAULT_DISCOVERY_TIMEOUT_SECONDS) -> 
 async def power(action: str) -> str:
     """Turn the Apple TV on or off.
 
+    Powering on sends an HDMI CEC 'Active Source' signal via pyatv, which causes
+    the Samsung TV to automatically switch to the Apple TV input — no manual
+    input switching needed if CEC is enabled on both devices.
+
     Args:
         action: 'on' to wake the Apple TV, 'off' to put it to sleep
     """
@@ -78,7 +82,10 @@ async def power(action: str) -> str:
     try:
         if action == "on":
             await client.power_on()
-            return "Apple TV powering on."
+            return (
+                "Apple TV powering on.\n"
+                "HDMI CEC Active Source sent — Samsung TV should switch to Apple TV input automatically."
+            )
         else:
             await client.power_off()
             return "Apple TV powering off."

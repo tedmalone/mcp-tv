@@ -1,5 +1,8 @@
 #!/usr/bin/env node
-import 'dotenv/config';
+import { config as dotenvConfig } from 'dotenv';
+import { resolve, dirname } from 'path';
+import { fileURLToPath } from 'url';
+dotenvConfig({ path: resolve(dirname(fileURLToPath(import.meta.url)), '..', '.env') });
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { SamsungTvClient } from './samsung-client.js';

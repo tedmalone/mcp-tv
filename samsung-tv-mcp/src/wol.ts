@@ -55,10 +55,9 @@ export function sendWakeOnLan(
 /**
  * Send a burst of Wake-on-LAN magic packets with small inter-packet delays.
  *
- * Samsung TVs in deep standby power down the network interface entirely.
- * The first few packets in the burst wake the NIC; later packets trigger
- * the actual power-on. 16 packets with ~100ms spacing is the empirically
- * reliable approach documented by the SmartThings community.
+ * 16 packets at ~100ms spacing is the community-recommended approach.
+ * On TVs with a built-in SmartThings hub (e.g. QN55S95FAFXZA), the hub keeps
+ * the WiFi interface active in standby so WoL works reliably over WiFi.
  *
  * The TV must have "Power On with Mobile" enabled:
  *   Settings → General → Network → Expert Settings → Power On with Mobile

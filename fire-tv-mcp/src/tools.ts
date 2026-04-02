@@ -712,6 +712,28 @@ export function registerTools(server: McpServer, adb: AdbClient, rest: FireTvRes
   );
 
   server.tool(
+    'wake',
+    [
+      'Wake the Fire TV from sleep.',
+      'If HDMI CEC is enabled on the Fire TV (Settings → Display & Sounds → HDMI CEC Device Control),',
+      'waking the device sends an HDMI CEC "Active Source" signal that causes the Samsung TV to',
+      'automatically switch to the Fire TV input — no manual input switching needed.',
+    ].join(' '),
+    {},
+    async () => {
+      try {
+        await adb.shell('input keyevent KEYCODE_WAKEUP');
+        return ok(
+          'Wake signal sent.\n' +
+            'If HDMI CEC is enabled, the Samsung TV should switch to Fire TV input automatically.',
+        );
+      } catch (e) {
+        return err(withHints(`wake failed: ${e instanceof Error ? e.message : String(e)}`));
+      }
+    },
+  );
+
+  server.tool(
     'sleep',
     'Put Fire TV to sleep. Uses REST API when configured, falls back to ADB.',
     {},

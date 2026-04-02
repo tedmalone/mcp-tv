@@ -1,30 +1,11 @@
 import { createLogger } from './logger.js';
 
-const INPUT_SOURCE_MAP: Record<string, string> = {
-  hdmi1: 'HDMI1',
-  hdmi2: 'HDMI2',
-  hdmi3: 'HDMI3',
-  hdmi4: 'HDMI4',
-  hdmi: 'HDMI1',
-  dtv: 'digitalTv',
-  tv: 'digitalTv',
-  component1: 'Component',
-  component2: 'Component2',
-  av1: 'AV',
-  av2: 'AV2',
-};
-
-/** Map a tool input name (hdmi2, dtv, etc.) to a SmartThings setInputSource argument. */
-export function toSmartThingsInput(input: string): string | null {
-  return INPUT_SOURCE_MAP[input.toLowerCase()] ?? null;
-}
-
 /**
  * Minimal SmartThings Cloud API client.
  *
  * Required env vars:
- *   SAMSUNG_SMARTTHINGS_TOKEN  — personal access token from https://account.smartthings.com/tokens
- *   SAMSUNG_SMARTTHINGS_DEVICE_ID — device UUID (find via GET /v1/devices)
+ *   SAMSUNG_SMARTTHINGS_TOKEN      — personal access token (valid 24h; regenerate at account.smartthings.com/tokens)
+ *   SAMSUNG_SMARTTHINGS_DEVICE_ID  — device UUID (find via GET /v1/devices)
  *
  * Optional:
  *   SAMSUNG_SMARTTHINGS_API_URL — override base URL (default: https://api.smartthings.com/v1)
@@ -57,7 +38,6 @@ export class SmartThingsClient {
       body: JSON.stringify({ commands }),
       signal: AbortSignal.timeout(10000),
     });
-
     if (!res.ok) {
       const body = await res.text().catch(() => '');
       throw new Error(
@@ -65,6 +45,17 @@ export class SmartThingsClient {
       );
     }
     this.logger.debug(`SmartThings command OK: ${JSON.stringify(commands)}`);
+  }
+
+  private async get(path: string): Promise<unknown> {
+    const res = await fetch(`${this.baseUrl}${path}`, {
+      headers: { Authorization: `Bearer ${this.token}` },
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!res.ok) {
+      throw new Error(`SmartThings GET error ${res.status} for ${path}`);
+    }
+    return res.json();
   }
 
   /** Power the TV on via SmartThings. */
@@ -81,15 +72,13 @@ export class SmartThingsClient {
 
   /**
    * Switch to an input source directly.
-   *
-   * @param source SmartThings input source value (e.g. "HDMI2", "digitalTv").
-   *               Use toSmartThingsInput() to convert tool input names.
+   * Pass the exact input ID from list_inputs (e.g. "HDMI2", "dtv").
    */
   async setInputSource(source: string): Promise<void> {
     await this.sendCommand([
       {
         component: 'main',
-        capability: 'mediaInputSource',
+        capability: 'samsungvd.mediaInputSource',
         command: 'setInputSource',
         arguments: [source],
       },
@@ -98,21 +87,22 @@ export class SmartThingsClient {
   }
 
   /**
-   * List available input sources from the TV via SmartThings.
-   * Useful for discovering the exact source names your TV supports.
+   * List available input sources from the TV.
+   * Uses samsungvd.mediaInputSource — the standard mediaInputSource returns
+   * empty values on Tizen TVs.
    */
-  async getSupportedInputSources(): Promise<string[]> {
-    const url = `${this.baseUrl}/devices/${this.deviceId}/components/main/capabilities/mediaInputSource/status`;
-    const res = await fetch(url, {
-      headers: { Authorization: `Bearer ${this.token}` },
-      signal: AbortSignal.timeout(10000),
-    });
-    if (!res.ok) {
-      throw new Error(`SmartThings status error ${res.status}`);
-    }
-    const data = (await res.json()) as {
-      supportedInputSources?: { value?: string[] };
-    };
-    return data.supportedInputSources?.value ?? [];
+  async getSupportedInputSources(): Promise<{ id: string; name: string }[]> {
+    const data = (await this.get(
+      `/devices/${this.deviceId}/components/main/capabilities/samsungvd.mediaInputSource/status`,
+    )) as { supportedInputSourcesMap?: { value?: { id: string; name: string }[] } };
+    return data.supportedInputSourcesMap?.value ?? [];
+  }
+
+  /** Get the current active input source ID. */
+  async getCurrentInputSource(): Promise<string | null> {
+    const data = (await this.get(
+      `/devices/${this.deviceId}/components/main/capabilities/samsungvd.mediaInputSource/status`,
+    )) as { inputSource?: { value?: string } };
+    return data.inputSource?.value ?? null;
   }
 }
