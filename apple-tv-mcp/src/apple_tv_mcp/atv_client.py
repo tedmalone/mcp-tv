@@ -333,14 +333,6 @@ class AtvClient:
         else:
             await atv.keyboard.text_set(text)
 
-    async def get_text(self) -> str:
-        atv = await self.ensure_connected()
-        return await atv.keyboard.text_get()
-
-    async def clear_text(self) -> None:
-        atv = await self.ensure_connected()
-        await atv.keyboard.text_clear()
-
     # -- Discovery helpers --
 
     async def _discover(

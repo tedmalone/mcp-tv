@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { AdbClient } from '../src/adb-client.js';
+import type { FireTvRestClient } from '../src/firetv-rest-client.js';
 import { registerTools } from '../src/tools.js';
 
 // ---------------------------------------------------------------------------
@@ -49,6 +50,21 @@ function createMockClient() {
   return { client, shellCalls, keyeventCalls };
 }
 
+function createMockRestClient() {
+  const rest = {
+    ready: false,
+    configured: false,
+    setTargetIp: vi.fn(),
+    verifyPin: vi.fn(async () => 'token'),
+    displayPin: vi.fn(async () => {}),
+    sendNavKey: vi.fn(async () => {}),
+    sendMediaCommand: vi.fn(async () => {}),
+    launchApp: vi.fn(async () => {}),
+  } as unknown as FireTvRestClient;
+
+  return { rest };
+}
+
 // ---------------------------------------------------------------------------
 // type_text — encodeInputText (security-critical escaping)
 // ---------------------------------------------------------------------------
@@ -60,9 +76,10 @@ describe('type_text — shell escaping', () => {
   beforeEach(() => {
     const mock = createMockServer();
     const clientMock = createMockClient();
+    const restMock = createMockRestClient();
     handlers = mock.handlers;
     shellCalls = clientMock.shellCalls;
-    registerTools(mock.server, clientMock.client);
+    registerTools(mock.server, clientMock.client, restMock.rest);
   });
 
   async function typeText(text: string): Promise<string> {
@@ -118,9 +135,10 @@ describe('press_key — key normalization', () => {
   beforeEach(() => {
     const mock = createMockServer();
     const clientMock = createMockClient();
+    const restMock = createMockRestClient();
     handlers = mock.handlers;
     keyeventCalls = clientMock.keyeventCalls;
-    registerTools(mock.server, clientMock.client);
+    registerTools(mock.server, clientMock.client, restMock.rest);
   });
 
   const friendlyKeyMap: Record<string, string> = {
@@ -173,10 +191,11 @@ describe('click_node — bounds parsing', () => {
   beforeEach(() => {
     const mock = createMockServer();
     const clientMock = createMockClient();
+    const restMock = createMockRestClient();
     handlers = mock.handlers;
     client = clientMock.client;
     vi.mocked(client.getScreenXml).mockResolvedValue(sampleXml);
-    registerTools(mock.server, clientMock.client);
+    registerTools(mock.server, clientMock.client, restMock.rest);
   });
 
   it('taps the center of a node matched by text', async () => {
@@ -205,6 +224,7 @@ describe('discover — auto target selection', () => {
   it('auto-selects a ready discovered device when FIRETV_IP is not configured', async () => {
     const mock = createMockServer();
     const clientMock = createMockClient();
+    const restMock = createMockRestClient();
     (clientMock.client as unknown as { configuredSerial: string | null }).configuredSerial = null;
     vi.mocked(clientMock.client.listDevices).mockResolvedValueOnce([
       {
@@ -214,7 +234,7 @@ describe('discover — auto target selection', () => {
       },
     ]);
 
-    registerTools(mock.server, clientMock.client);
+    registerTools(mock.server, clientMock.client, restMock.rest);
     const discover = mock.handlers.get('discover')!;
     const result = await discover({});
 
@@ -226,6 +246,7 @@ describe('discover — auto target selection', () => {
   it('filters out non-Fire devices from discover output and auto-select', async () => {
     const mock = createMockServer();
     const clientMock = createMockClient();
+    const restMock = createMockRestClient();
     (clientMock.client as unknown as { configuredSerial: string | null }).configuredSerial = null;
     vi.mocked(clientMock.client.listDevices).mockResolvedValueOnce([
       {
@@ -240,7 +261,7 @@ describe('discover — auto target selection', () => {
       },
     ]);
 
-    registerTools(mock.server, clientMock.client);
+    registerTools(mock.server, clientMock.client, restMock.rest);
     const discover = mock.handlers.get('discover')!;
     const result = await discover({});
 

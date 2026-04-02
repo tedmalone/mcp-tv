@@ -106,10 +106,12 @@ Add to your Claude Desktop config (`~/Library/Application Support/Claude/claude_
 | -------------- | ----------------------------------------------------- |
 | `discover`     | Scan local subnet for Samsung TVs                     |
 | `power`        | Power on (Wake-on-LAN) or off                         |
-| `set_volume`   | Set volume to a target level (sends key presses)      |
+| `set_volume`   | Step volume up or down by a number of presses          |
 | `get_volume`   | Read current volume from device info                  |
 | `mute`         | Toggle mute                                           |
-| `switch_input` | Switch input source (HDMI1–4, DTV, TV, Component, AV) |
+| `switch_input` | Switch input source (SmartThings input ID or source-grid fallback) |
+| `list_inputs`  | List SmartThings-reported input source IDs             |
+| `get_input`    | Get current SmartThings input source ID                |
 | `send_key`     | Send a raw Samsung key code (e.g. `KEY_MENU`)         |
 
 ## Troubleshooting

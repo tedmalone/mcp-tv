@@ -73,16 +73,18 @@ Accumulated notes from real device testing. Updated over time as new devices are
   - Row 1: [**current active input** — always focused on open] | Help
   - Row 2: External Devices | Setup Universal Remote
 - The current input is **always focused** when the grid opens. The last-used other input is always at (0,1) — one RIGHT, one UP.
-- `switch_input` effectively **toggles** between the two most recently used inputs. It cannot target an arbitrary input (e.g., HDMI1) without manual `send_key` navigation.
+- `switch_input` effectively **toggles** between the two most recently used inputs. It cannot target an arbitrary input without manual `send_key` navigation.
+- For reliable arbitrary input switching, use SmartThings `setInputSource` with the exact input ID (`dtv`, `HDMI2`, `HDMI3`) when a valid token is available.
+- For input switching without SmartThings, use HDMI CEC: waking the Fire TV (`KEYCODE_WAKEUP`) or Apple TV (`power on`) sends CEC "Active Source" which switches the Samsung TV to that device's input automatically. Requires **Anynet+ (HDMI-CEC)** enabled on the Samsung: Settings → General & Privacy → External Device Manager → Anynet+.
 - **Do not try to reset to top-left** (UP×N + LEFT×N). Samsung's grid **wraps at the edges** — overshooting lands in unexpected positions.
 - **Pressing RIGHT from the rightmost column flips to page 2** — easy to overshoot if navigating beyond col 1.
 - The grid times out after ~3 seconds of inactivity. Continuous key presses keep it open.
 - **Samsung TV has no screenshot API.** Navigation is completely blind. Without visual feedback, complex multi-step grid navigation is unreliable — stick to the confirmed 3-key toggle sequence.
 
 ### Wake-on-LAN
-- WoL **requires Ethernet**. The TV is on WiFi (`networkType: wireless`); its WiFi NIC powers down in standby and doesn't receive magic packets.
-- "Power On with Mobile" setting (Network Status → Expert Settings → Power On with Mobile) must be enabled but is only effective over Ethernet.
-- `set_volume` and SmartThings cloud API are the M2 path for WiFi power-on.
+- This model has a **built-in SmartThings hub** that keeps the WiFi interface active in standby. WoL works over WiFi on this TV despite the `networkType: wireless` REST field.
+- Send a **burst of 16 magic packets at ~100ms spacing** — the community-recommended approach for reliability.
+- "Power On with Mobile" must be enabled: **Settings → General → Network → Expert Settings → Power On with Mobile**.
 - Power **off** works fine via WebSocket `KEY_POWER`.
 
 ### IP Remote / Port 55000
@@ -91,6 +93,15 @@ Accumulated notes from real device testing. Updated over time as new devices are
 ### Volume
 - Direct volume control via WebSocket keycodes is unreliable on this model.
 - The AMBEO Soundbar (192.168.6.210) handles audio output. The TV passes volume CEC to the soundbar.
+
+### SmartThings Integration
+- The TV registers as two SmartThings devices: **"55" OLED"** (the controllable TV device) and **"Hub - 55" OLED"** (the built-in SmartThings hub, always connected).
+- The controllable TV device (`55" OLED`) can go offline in SmartThings even while physically on. Fix: **Settings → All Settings → Connection → SmartThings** → sign out and back in.
+- SmartThings Personal Access Tokens (PATs) from `account.smartthings.com/tokens` **expire after 24 hours** as of December 2024. OAuth is required for long-lived access but Samsung's developer portal does not support personal-use OAuth app registration without a full production app submission. The SmartThings CLI `apps:create` command has a bug (`Invalid URL`) on the current version.
+- **Standard `mediaInputSource` capability returns empty values** on this TV. Use `samsungvd.mediaInputSource` instead — it returns `supportedInputSourcesMap` with real input IDs (`dtv`, `HDMI2`, `HDMI3`) and the current `inputSource`.
+- SmartThings `setInputSource` sends to `samsungvd.mediaInputSource` capability and is instant and reliable when the TV is online and the token is valid.
+- Input switching via SmartThings returns `409 ConflictError: invalid device state` if the TV is offline in SmartThings (even if physically on) or if the PAT has expired.
+- This TV's inputs: `dtv` (TV tuner/home screen), `HDMI2` (HDMI 2), `HDMI3` (labeled "SB02M" — the AMBEO soundbar).
 
 ---
 

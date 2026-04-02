@@ -1,30 +1,9 @@
 import { z } from 'zod';
-import { resolve, dirname } from 'path';
-import { fileURLToPath } from 'url';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { SamsungRestDevice, SamsungRestResponse } from './samsung-client.js';
 import { SamsungTvClient } from './samsung-client.js';
 import { SmartThingsClient } from './smartthings-client.js';
 import { sendWakeOnLanBurst } from './wol.js';
-
-const ENV_PATH = resolve(dirname(fileURLToPath(import.meta.url)), '..', '.env');
-
-/** Samsung key code mapping for input sources (WebSocket fallback only) */
-const INPUT_KEY_CODES: Record<string, string> = {
-  hdmi1: 'KEY_HDMI1',
-  hdmi2: 'KEY_HDMI2',
-  hdmi3: 'KEY_HDMI3',
-  hdmi4: 'KEY_HDMI4',
-  hdmi: 'KEY_HDMI',
-  dtv: 'KEY_DTV',
-  tv: 'KEY_TV',
-  component1: 'KEY_COMPONENT1',
-  component2: 'KEY_COMPONENT2',
-  av1: 'KEY_AV1',
-  av2: 'KEY_AV2',
-};
-
-const VALID_INPUTS = Object.keys(INPUT_KEY_CODES);
 
 const delay = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 

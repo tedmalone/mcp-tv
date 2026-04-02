@@ -34,7 +34,7 @@ Edit `.env`:
 ```
 ATV_IP=192.168.1.101   # your Apple TV's IP address (optional — auto-discovered if omitted)
 ATV_NAME=              # filter by name if you have multiple Apple TVs (optional)
-ATV_CREDENTIALS=       # leave blank — auto-populated after pairing
+ATV_CREDENTIALS_PATH=pyatv_credentials.json  # credentials file path (auto-created after pairing)
 ```
 
 **Finding your Apple TV's IP address:**
@@ -119,7 +119,6 @@ Replace the command path with the output of `which apple-tv-mcp` (after activati
 | `power` | Power on or off (`on` / `off`) |
 | `set_volume` | Set volume level (0–100) |
 | `get_volume` | Read current volume |
-| `mute` | Mute (direction: `up` or `down`) |
 | `press_key` | Press a key (up/down/left/right/select/menu/home/play/pause/etc.) |
 | `press_keys` | Press multiple keys in sequence with optional delay |
 | `go_home` | Go to the home screen |

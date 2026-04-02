@@ -143,13 +143,6 @@ async def volume_step(direction: str) -> str:
 # ---- Navigation / Remote ----
 
 
-VALID_KEYS = [
-    "up", "down", "left", "right", "select", "enter",
-    "menu", "back", "home", "play", "pause", "play_pause",
-    "stop", "next", "previous", "top_menu", "screensaver",
-]
-
-
 @mcp.tool()
 async def press_key(key: str) -> str:
     """Simulate a remote button press on the Apple TV.

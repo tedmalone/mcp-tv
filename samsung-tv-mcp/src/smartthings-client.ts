@@ -64,12 +64,6 @@ export class SmartThingsClient {
     this.logger.info('SmartThings: power on sent.');
   }
 
-  /** Power the TV off via SmartThings. */
-  async powerOff(): Promise<void> {
-    await this.sendCommand([{ component: 'main', capability: 'switch', command: 'off' }]);
-    this.logger.info('SmartThings: power off sent.');
-  }
-
   /**
    * Switch to an input source directly.
    * Pass the exact input ID from list_inputs (e.g. "HDMI2", "dtv").
